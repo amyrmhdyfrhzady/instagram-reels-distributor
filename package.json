@@ -1,16 +1,17 @@
 {
   "name": "instagram-reels-distributor",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "description": "Instagram Reels collector and Telegram distributor using Playwright + GitHub Actions",
   "type": "module",
+  "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js"
   },
   "dependencies": {
-    "cheerio": "^1.1.2",
-    "dotenv": "^17.2.1",
+    "axios": "^1.8.4",
+    "cheerio": "^1.1.0",
     "fs-extra": "^11.3.2",
-    "playwright": "^1.55.0",
-    "telegram": "^2.26.22",
-    "input": "^1.0.1"
+    "node-telegram-bot-api": "^0.66.0",
+    "playwright": "^1.55.0"
   }
 }
