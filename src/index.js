@@ -1,8 +1,16 @@
+import TelegramBot from "node-telegram-bot-api";
 import * as cheerio from "cheerio";
 import { chromium } from "playwright";
 import fs from "fs-extra";
 import path from "path";
 import config from "../config.js";
+const bot =
+  new TelegramBot(
+    process.env.TELEGRAM_BOT_TOKEN,
+    {
+      polling: false
+    }
+  );
 
 console.log("Instagram Reels Distributor Started");
 
@@ -121,6 +129,25 @@ console.log(
 
 console.log(
   [...reels]
+);
+  for (const reel of reels) {
+
+  await bot.sendMessage(
+    process.env.TELEGRAM_CHAT_ID,
+    reel,
+    {
+      disable_web_page_preview: true
+    }
+  );
+
+  await new Promise(resolve =>
+    setTimeout(resolve, 1000)
+  );
+
+}
+
+console.log(
+  `${reels.size} links sent`
 );
   console.log(
     `Saved: ${filePath}`
