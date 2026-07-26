@@ -1,0 +1,41 @@
+name: Send To Started Users
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install
+
+      - run: npx playwright install chromium
+
+      - name: Run
+        env:
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node index.js
+
+      - name: Commit Database
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+
+          git add database/*
+          git add downloads/*
+
+          git diff --cached --quiet || git commit -m "update database"
+
+          git push
