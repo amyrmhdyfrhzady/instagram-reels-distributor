@@ -1,41 +1,31 @@
-import { chromium } from "playwright";
-import fs from "fs/promises";
-import config from "./config.js";
+import fs from "fs";
+import run from "./main.js";
 
-const browser = await chromium.launch({
-  headless: true
-});
+const USERS_FILE = "./database/users.json";
+const SENT_FILE = "./database/sent.json";
 
-const context = await browser.newContext();
+if (!fs.existsSync("./database"))
+  fs.mkdirSync("./database");
 
-const page = await context.newPage();
+if (!fs.existsSync(USERS_FILE))
+  fs.writeFileSync(USERS_FILE, "[]");
 
-page.setDefaultTimeout(config.browser.timeout);
+if (!fs.existsSync(SENT_FILE))
+  fs.writeFileSync(SENT_FILE, "[]");
 
-for (const category of config.categories) {
-  console.log(`Category: ${category.name}`);
+const users = JSON.parse(
+  fs.readFileSync(USERS_FILE, "utf8")
+);
 
-  await page.goto(category.url, {
-    waitUntil: "networkidle"
-  });
+const sent = new Set(
+  JSON.parse(
+    fs.readFileSync(SENT_FILE, "utf8")
+  )
+);
 
-  await page.waitForTimeout(5000);
+await run(users, sent);
 
-  const mhtml = await page.context().newCDPSession(page);
-
-  const { data } = await mhtml.send("Page.captureSnapshot", {
-    format: "mhtml"
-  });
-
-  await fs.mkdir("mhtml", {
-    recursive: true
-  });
-
-  await fs.writeFile(
-    `mhtml/${category.name}.mhtml`,
-    data,
-    "utf8"
-  );
-}
-
-await browser.close();
+fs.writeFileSync(
+  SENT_FILE,
+  JSON.stringify([...sent], null, 2)
+);
