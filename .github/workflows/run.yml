@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  reels:
+  run:
     runs-on: ubuntu-latest
 
     steps:
@@ -14,19 +14,24 @@ jobs:
         with:
           node-version: 22
 
-      - run: npm install
+      - name: Install
+        run: |
+          npm install
+          npx playwright install chromium
 
-      - run: npx playwright install chromium
-
-      - run: node src/index.js
+      - name: Run
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-      - name: Upload Debug Files
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-         name: savefrom-debug
-         path: |
-          savefrom.png
-          savefrom.html
+        run: node src/main.js
+
+      - name: Commit
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+
+          git add .
+
+          git diff --cached --quiet || git commit -m "Update downloaded reels"
+
+          git push
