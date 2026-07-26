@@ -28,5 +28,5 @@ jobs:
         with:
          name: savefrom-debug
          path: |
-          debug.png
-          debug.html
+          savefrom.png
+          savefrom.html
