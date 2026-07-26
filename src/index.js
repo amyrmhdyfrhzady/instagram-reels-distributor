@@ -4,6 +4,49 @@ import config from "../config.js";
 
 console.log("Instagram Reels Distributor Started");
 
+async function getDownloadUrl(browser, saveFromUrl) {
+
+  const page = await browser.newPage({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+  });
+
+  try {
+
+    console.log("Opening SaveFrom");
+
+    await page.goto(saveFromUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000
+    });
+
+    const button = await page.waitForSelector(
+      "a[href*='media.sf-converter.com']",
+      {
+        state: "visible",
+        timeout: 30000
+      }
+    );
+
+    const downloadUrl =
+      await button.getAttribute("href");
+
+    return downloadUrl;
+
+  } catch (error) {
+
+    console.log("Download url not found");
+
+    return null;
+
+  } finally {
+
+    await page.close();
+
+  }
+
+}
+
 const browser = await chromium.launch({
   headless: true,
   args: [
@@ -76,7 +119,19 @@ for (const category of config.categories) {
         reel + "?noredirect=1"
       )}&`;
 
-    console.log(saveFromUrl);
+    const downloadUrl =
+  await getDownloadUrl(
+    browser,
+    saveFromUrl
+  );
+
+if (!downloadUrl) {
+
+  continue;
+
+}
+
+console.log(downloadUrl);
 
   }
 
