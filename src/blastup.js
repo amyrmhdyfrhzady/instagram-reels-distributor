@@ -1,45 +1,39 @@
-import fs from "fs/promises";
+import fs from "fs";
 import path from "path";
 
-import { chromium } from "playwright";
+export default async function downloadFromBlastUp(page, reelUrl) {
 
-export async function downloadReel(reel) {
+  await page.goto(
+    "https://blastup.com/instagram-downloader",
+    {
+      waitUntil: "domcontentloaded"
+    }
+  );
 
-  const browser = await chromium.launch({
-    headless: true
+  const downloadPromise = page.waitForEvent("download", {
+    timeout: 60000
   });
 
-  const context = await browser.newContext({
-    acceptDownloads: true
-  });
+  await page.fill("#link", reelUrl);
 
-  const page = await context.newPage();
-
-  await page.goto("https://blastup.com/instagram-downloader", {
-    waitUntil: "domcontentloaded"
-  });
-
-  await page.fill("#link", reel);
-
-  const downloadPromise = page.waitForEvent("download");
-
-  await page.click("button[type='submit']");
+  await page.click("button[type=submit]");
 
   const download = await downloadPromise;
 
-  await fs.mkdir("downloads", {
-    recursive: true
-  });
+  const downloadsDir = path.resolve("downloads");
 
-  const file = path.join(
-    "downloads",
-    await download.suggestedFilename()
-  );
+  if (!fs.existsSync(downloadsDir))
+    fs.mkdirSync(downloadsDir);
 
-  await download.saveAs(file);
+  let filename = download.suggestedFilename();
 
-  await browser.close();
+  if (!filename)
+    filename = `${Date.now()}.mp4`;
 
-  return file;
+  const filePath = path.join(downloadsDir, filename);
+
+  await download.saveAs(filePath);
+
+  return filePath;
 
 }
