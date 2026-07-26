@@ -1,14 +1,11 @@
 {
   "name": "instagram-reels-distributor",
-  "version": "1.0.0",
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node index.js"
+    "start": "node src/index.js"
   },
   "dependencies": {
-    "@playwright/test": "^1.55.0",
-    "axios": "^1.11.0",
-    "form-data": "^4.0.4"
+    "playwright": "^1.54.2"
   }
 }
