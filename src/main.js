@@ -1,71 +1,61 @@
-import fs from "fs";
-import path from "path";
-
 import config from "./config.js";
+import getReels from "./instagram.js";
+import downloadFromBlastUp from "./blastup.js";
+import sendFile from "./bale.js";
 
-import { getReelsFromCategory } from "./instagram.js";
-import { downloadReel } from "./blastup.js";
-import { getUsers } from "./users.js";
-import { sendFile } from "./bale.js";
+import { chromium } from "playwright";
 
-const SENT_FILE = "sent.json";
+export default async function run(users, sent) {
 
-let sent = [];
+  const browser = await chromium.launch({
+    headless: true
+  });
 
-if (fs.existsSync(SENT_FILE)) {
-  sent = JSON.parse(fs.readFileSync(SENT_FILE, "utf8"));
-}
+  const context = await browser.newContext({
+    acceptDownloads: true
+  });
 
-const users = await getUsers();
+  const page = await context.newPage();
 
-for (const category of config.categories) {
+  for (const category of config.categories) {
 
-  const reels = await getReelsFromCategory(category);
+    const reels = await getReels(page, category);
 
-  for (const reel of reels) {
+    for (const reel of reels) {
 
-    if (sent.includes(reel))
-      continue;
-
-    let file;
-
-    try {
-
-      file = await downloadReel(reel);
-
-    } catch {
-
-      continue;
-
-    }
-
-    for (const user of users) {
+      if (sent.has(reel))
+        continue;
 
       try {
 
-        await sendFile(user.chatId, file);
+        const file = await downloadFromBlastUp(page, reel);
+
+        for (const user of users) {
+
+          try {
+
+            await sendFile(user, file);
+
+          } catch {
+
+            continue;
+
+          }
+
+        }
+
+        sent.add(reel);
 
       } catch {
+
+        continue;
 
       }
 
     }
 
-    sent.push(reel);
-
-    fs.writeFileSync(
-      SENT_FILE,
-      JSON.stringify(sent, null, 2)
-    );
-
-    try {
-
-      fs.unlinkSync(file);
-
-    } catch {
-
-    }
-
   }
+
+  await browser.close();
 
 }
