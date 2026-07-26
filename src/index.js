@@ -123,9 +123,8 @@ for (const category of config.categories) {
   for (const reel of reels.slice(0, category.limit)) {
 
     const saveFromUrl =
-      `https://en1.savefrom.net/19wr/#url=${encodeURIComponent(
-        reel + "?noredirect=1"
-      )}&`;
+  "https://savefrom.net/https:/" +
+  reel.replace(/^https:\/\//, "");
 
     const downloadUrl =
   await getDownloadUrl(
