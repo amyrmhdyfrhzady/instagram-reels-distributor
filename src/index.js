@@ -19,7 +19,15 @@ async function getDownloadUrl(browser, saveFromUrl) {
       waitUntil: "domcontentloaded",
       timeout: 60000
     });
+    await page.screenshot({
+  path: "savefrom.png",
+  fullPage: true,
+});
 
+console.log(await page.title());
+
+console.log(await page.content());
+    
     const button = await page.waitForSelector(
       "a[href*='media.sf-converter.com']",
       {
