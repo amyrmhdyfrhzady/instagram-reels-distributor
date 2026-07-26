@@ -1,28 +1,34 @@
-import axios from "axios";
-import FormData from "form-data";
 import fs from "fs";
 
-import config from "./config.js";
-
-export async function sendFile(chatId, file) {
+export default async function sendFile(userId, filePath) {
 
   const form = new FormData();
 
-  form.append("chat_id", chatId);
+  form.append(
+    "chat_id",
+    userId
+  );
 
   form.append(
     "document",
-    fs.createReadStream(file)
+    new Blob([fs.readFileSync(filePath)]),
+    filePath.split("/").pop()
   );
 
-  await axios.post(
-    `https://tapi.bale.ai/bot${config.telegram.botToken}/sendDocument`,
-    form,
+  const res = await fetch(
+
+    `https://tapi.bale.ai/bot${process.env.BALE_BOT_TOKEN}/sendDocument`,
+
     {
-      headers: form.getHeaders(),
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity
+      method: "POST",
+      body: form
     }
+
   );
+
+  if (!res.ok)
+    throw new Error(await res.text());
+
+  return await res.json();
 
 }
