@@ -55,7 +55,6 @@ async function syncAndWelcomeBaleUsers() {
 }
 
 // 🎯 بخش جدید: استخراج چندین ریلز بدون لاگین از طریق هدایت خودکار /reels/
-const count = config.randomReelsCount || 3;
 async function extractRandomReels(browser, count = 5) {
   console.log(`\n🎲 در حال دریافت ${count} ریلز جدید و غیرتکراری از بخش عمومی...`);
   const foundLinks = [];
@@ -109,7 +108,6 @@ async function extractRandomReels(browser, count = 5) {
   console.log(`✅ خروجی نهایی: ${foundLinks.length} ریلز خالص برای دانلود آماده شد.`);
   return foundLinks;
 }
-
 
 // ۲. استخراج لینک ریلزها مستقیماً از DOM
 async function extractReelsFromPage(page, categoryUrl) {
@@ -293,7 +291,8 @@ async function main() {
 
   // ۲.۵. اجرای بخش جدید: استخراج و دانلود ریلزهای تصادفی
   try {
-    const randomReelLinks = await extractRandomReels(browser, count);
+    const randomCount = config.randomReelsCount || 3;
+    const randomReelLinks = await extractRandomReels(browser, randomCount);
 
     for (const reelUrl of randomReelLinks) {
       console.log(`🎬 در حال پردازش و دانلود: ${reelUrl}`);
@@ -314,9 +313,6 @@ async function main() {
         } catch (e) {}
       }
     }
-  } catch (err) {
-    console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
-  }
   } catch (err) {
     console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
   }
