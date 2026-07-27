@@ -54,6 +54,60 @@ async function syncAndWelcomeBaleUsers() {
     console.error('خطا در همگام‌سازی کاربران بله:', err.message);
   }
 }
+// 🎯 بخش جدید: استخراج چندین ریلز بدون لاگین از طریق هدایت خودکار /reels/
+async function extractRandomReels(browser, count = 5) {
+  console.log(`🎲 در حال استخراج ${count} ریلز تصادفی از بخش عمومی...`);
+  const foundLinks = [];
+
+  for (let i = 1; i <= count; i++) {
+    // ایجاد یک context و صفحه تازه برای اینکه کش مرورگر باعث لود تکراری نشه
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    });
+    const page = await context.newPage();
+
+    try {
+      console.log(`🔄 تلاش ${i} از ${count} برای باز کردن /reels/`);
+      
+      // باز کردن بخش ریلز عمومی
+      await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      
+      // ۳ الی ۴ ثانیه صبر می‌کنیم تا ریدرایکت به لینک اصلی انجام بشه
+      await page.waitForTimeout(4000);
+
+      // گرفتن آدرس نهایی مرورگر
+      const currentUrl = page.url();
+
+      // استخراج آی‌دی و ساخت لینک تمیز ریلز
+      const match = currentUrl.match(/https?:\/\/(?:www\.)?instagram\.com\/reel(?:s)?\/([A-Za-z0-9_-]+)/);
+
+      if (match) {
+        const reelUrl = `https://www.instagram.com/reel/${match[1]}/`;
+        
+        // اگر تکراری نبود به لیست اضافه کن
+        if (!foundLinks.includes(reelUrl)) {
+          foundLinks.push(reelUrl);
+          console.log(`✨ لینک جدید پیدا شد: ${reelUrl}`);
+        } else {
+          console.log(`ℹ️ لینک تکراری بود، صرف‌نظر شد.`);
+        }
+      } else {
+        console.log(`⚠️ ریدرایکت به ریلز انجام نشد.`);
+      }
+
+    } catch (err) {
+      console.error(`❌ خطا در تلاش ${i}:`, err.message);
+    } finally {
+      await context.close(); // بستن صفحه برای رفتن به تلاش بعدی
+    }
+
+    // یک مکث کوتاه بین تلاش‌ها
+    await sleep(2000);
+  }
+
+  // حذف لینک‌های تکراری احتمالی
+  return Array.from(new Set(foundLinks));
+}
 
 // ۲. استخراج لینک ریلزها مستقیماً از DOM
 async function extractReelsFromPage(page, categoryUrl) {
@@ -179,7 +233,41 @@ async function dispatchVideoToUsers(filePath, caption) {
         console.log(`📤 ویدیو به کاربر ${chatId} ارسال شد.`);
         sentSuccessfully = true;
         break;
-      } catch (err) {
+      }
+          // 🚀 اجرای بخش جدید: استخراج و دانلود ریلزهای تصادفی
+  try {
+    // عدد 5 یعنی 5 بار صفحه /reels/ رو باز کن (می‌تونی کم یا زیادش کنی)
+    const randomReelLinks = await extractRandomReels(browser, 5);
+
+    // فیلتر کردن لینک‌هایی که قبلاً فرستاده نشدن
+    const newRandomLinks = randomReelLinks.filter(link => !db.sentReels.includes(link));
+    console.log(`📊 تعداد ریلزهای جدید غیرتکراری یافت شده: ${newRandomLinks.length}`);
+
+    // فرستادن لینک‌های جدید به بخش دانلود و ارسال
+    for (const reelUrl of newRandomLinks) {
+      console.log(`🎬 در حال پردازش و دانلود: ${reelUrl}`);
+      
+      const downloadedFilePath = await downloadReel(browser, reelUrl);
+
+      if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
+        await dispatchVideoToUsers(
+          downloadedFilePath,
+          `🔥 **ریلز داغ اینستاگرام**\n\n🔗 ${reelUrl}`
+        );
+
+        // ثبت در دیتابیس جهت جلوگیری از ارسال مجدد
+        db.sentReels.push(reelUrl);
+        saveDb();
+
+        // حذف فایل موقت از دیسک
+        try {
+          fs.unlinkSync(downloadedFilePath);
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
+  }    catch (err) {
         // اگر کاربر ربات را مسدود کرده باشد (403)، تلاش مجدد صورت نمی‌گیرد
         if (err.response && err.response.status === 403) {
           console.warn(`🚫 کاربر ${chatId} ربات را بلاک کرده است.`);
