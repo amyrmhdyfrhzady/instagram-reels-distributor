@@ -55,7 +55,8 @@ async function syncAndWelcomeBaleUsers() {
 }
 
 // 🎯 بخش جدید: استخراج چندین ریلز بدون لاگین از طریق هدایت خودکار /reels/
-async function extractRandomReels(browser, count = 5) {
+const count = config.randomReelsCount || 3;
+async function extractRandomReels(browser, count) {
   console.log(`\n🎲 در حال استخراج ${count} ریلز تصادفی از بخش عمومی...`);
   const foundLinks = [];
 
