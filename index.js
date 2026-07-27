@@ -40,7 +40,12 @@ async function syncAndWelcomeBaleUsers() {
               text: 'ثبت‌نام شما با موفقیت انجام شد! از این پس ریلزهای جدید برای شما ارسال می‌شوند.'
             });
           } catch (e) {
-            console.error(`خطا در ارسال پیام خوش‌آمدگویی به ${chatId}:`, e.message);
+            // مدیریت خطای ۴۰۳ (بلاک شدن ربات توسط کاربر)
+            if (e.response && e.response.status === 403) {
+              console.warn(`⚠️ کاربر ${chatId} ربات را بلاک کرده یا دسترسی ندارد.`);
+            } else {
+              console.error(`خطا در ارسال پیام خوش‌آمدگویی به ${chatId}:`, e.message);
+            }
           }
         }
       }
@@ -50,7 +55,7 @@ async function syncAndWelcomeBaleUsers() {
   }
 }
 
-// ۲. استخراج لینک ریلزها مستقیماً از DOM (جایگزین روش MHTML جهت جلوگیری از شکستن لینک‌ها)
+// ۲. استخراج لینک ریلزها مستقیماً از DOM
 async function extractReelsFromPage(page, categoryUrl) {
   console.log(`📡 در حال باز کردن دسته‌بندی: ${categoryUrl}`);
   await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -58,9 +63,8 @@ async function extractReelsFromPage(page, categoryUrl) {
 
   // اسکرول کوتاه برای لود شدن پست‌ها
   await page.evaluate(() => window.scrollBy(0, 1000));
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
 
-  // استخراج تمام <a>هایی که آدرس ریلز دارند
   const reelLinks = await page.evaluate(() => {
     const anchors = Array.from(document.querySelectorAll('a[href*="/reel/"]'));
     return anchors.map(a => {
@@ -74,38 +78,75 @@ async function extractReelsFromPage(page, categoryUrl) {
   return uniqueLinks;
 }
 
-// ۳. دانلود از BlastUp با ۳ بار تلاش
-async function downloadWithBlastup(browser, reelUrl) {
+// ۳. دانلود از سرویس FastDL (مقاوم‌تر در برابر تغییرات DOM)
+async function downloadReel(browser, reelUrl) {
   const downloadsDir = path.resolve('./downloads');
-  if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir);
+  if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     console.log(`⏳ تلاش ${attempt} از ۳ برای دانلود ریلز: ${reelUrl}`);
-    const context = await browser.newContext({ acceptDownloads: true });
+    
+    // ایحاد Context جدید با تنظیمات متناسب
+    const context = await browser.newContext({ 
+      acceptDownloads: true,
+      viewport: { width: 1280, height: 720 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    });
     const page = await context.newPage();
 
     try {
-      await page.goto('https://blastup.com/instagram-downloader', { waitUntil: 'domcontentloaded' });
-      const inputSelector = 'input#link.form-control';
+      // استفاده از سرویس fastdl.app
+      await page.goto('https://fastdl.app/fa', { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+      // یافتن اینپوت ورودی با چند سلکتور مجزا جهت اطمینان
+      const inputSelector = 'input[type="search"], input[name="url"], input#search-form-input';
       await page.waitForSelector(inputSelector, { timeout: 15000 });
       await page.fill(inputSelector, reelUrl);
 
-      const downloadPromise = page.waitForEvent('download', { timeout: 30000 });
+      // کلیک روی دکمه جستجو/دانلود اولیه
+      const searchBtn = await page.locator('button[type="submit"], button.search-form__btn').first();
+      await searchBtn.click();
 
-      const buttonSelector = 'button.btn--purple[type="submit"]';
-      await page.click(buttonSelector);
+      // انتظار برای تولید لینک دانلود مستقیم
+      const downloadBtnSelector = 'a.button__download, a[download]';
+      await page.waitForSelector(downloadBtnSelector, { timeout: 25000 });
 
-      const download = await downloadPromise;
-      const filePath = path.join(downloadsDir, `${Date.now()}_${await download.suggestedFilename()}`);
-      await download.saveAs(filePath);
+      // گرفتن مستقیم URL ویدیو و دانلود آن با axios جهت جلوگیری از گیر کردن در Eventهای Playwright
+      const downloadUrl = await page.getAttribute(downloadBtnSelector, 'href');
+
+      if (!downloadUrl) {
+        throw new Error('لینک دانلود ویدیو یافت نشد.');
+      }
+
+      const filePath = path.join(downloadsDir, `${Date.now()}_reel.mp4`);
+      
+      // دانلود مستقیم فایل ویدیو
+      const response = await axios({
+        method: 'GET',
+        url: downloadUrl,
+        responseType: 'stream',
+        timeout: 60000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        }
+      });
+
+      const writer = fs.createWriteStream(filePath);
+      response.data.pipe(writer);
+
+      await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
 
       await context.close();
       console.log(`✅ دانلود با موفقیت انجام شد: ${filePath}`);
       return filePath;
+
     } catch (err) {
-      console.error(`❌ تلاش ${attempt} ناموفق بود (${err.message})`);
+      console.error(`❌ تلاش ${attempt} ناموفق بود: ${err.message}`);
       await context.close();
-      await sleep(3000);
+      await sleep(4000);
     }
   }
 
@@ -113,7 +154,7 @@ async function downloadWithBlastup(browser, reelUrl) {
   return null;
 }
 
-// ۴. ارسال ویدیو به بله
+// ۴. ارسال ویدیو به کاربران بله
 async function dispatchVideoToUsers(filePath, caption) {
   if (!BALE_BOT_TOKEN || db.users.length === 0) {
     console.log('⚠️ کاربری برای ارسال یافت نشد یا توکن بله تنظیم نیست.');
@@ -139,13 +180,14 @@ async function dispatchVideoToUsers(filePath, caption) {
         sentSuccessfully = true;
         break;
       } catch (err) {
-        console.error(`⚠️ تلاش ${attempt} برای ارسال به ${chatId} ناموفق بود.`);
+        // اگر کاربر ربات را مسدود کرده باشد (403)، تلاش مجدد صورت نمی‌گیرد
+        if (err.response && err.response.status === 403) {
+          console.warn(`🚫 کاربر ${chatId} ربات را بلاک کرده است.`);
+          break;
+        }
+        console.error(`⚠️ تلاش ${attempt} برای ارسال به ${chatId} ناموفق بود: ${err.message}`);
         await sleep(2000);
       }
-    }
-
-    if (!sentSuccessfully) {
-      console.log(`🚫 ارسال به کاربر ${chatId} ناموفق بود (احتمال بلاک). سیستم رد می‌شود.`);
     }
   }
 }
@@ -156,29 +198,31 @@ async function main() {
 
   const browser = await chromium.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: [
+      '--no-sandbox', 
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled' // برای عدم شناسایی توسط آنتی‌ربات‌ها
+    ]
   });
-
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-  });
-  const page = await context.newPage();
 
   for (const category of config.categories) {
     console.log(`\n📂 شروع پردازش دسته‌بندی: ${category.name}`);
 
     try {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      
       const allExtractedLinks = await extractReelsFromPage(page, category.url);
+      await context.close();
 
       const newLinks = allExtractedLinks.filter((link) => !db.sentReels.includes(link));
       console.log(`✨ لینک‌های جدید: ${newLinks.length}`);
 
-      // استفاده از limit اختصاصی هر کتگوری
       const limit = category.limit || 2;
       const targetLinks = newLinks.slice(0, limit);
 
       for (const reelUrl of targetLinks) {
-        const downloadedFilePath = await downloadWithBlastup(browser, reelUrl);
+        const downloadedFilePath = await downloadReel(browser, reelUrl);
 
         if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
           await dispatchVideoToUsers(
@@ -189,7 +233,10 @@ async function main() {
           db.sentReels.push(reelUrl);
           saveDb();
 
-          fs.unlinkSync(downloadedFilePath);
+          // حذف فایل موقت
+          try {
+            fs.unlinkSync(downloadedFilePath);
+          } catch (e) {}
         }
       }
     } catch (err) {
