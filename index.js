@@ -40,7 +40,6 @@ async function syncAndWelcomeBaleUsers() {
               text: 'ثبت‌نام شما با موفقیت انجام شد! از این پس ریلزهای جدید برای شما ارسال می‌شوند.'
             });
           } catch (e) {
-            // مدیریت خطای ۴۰۳ (بلاک شدن ربات توسط کاربر)
             if (e.response && e.response.status === 403) {
               console.warn(`⚠️ کاربر ${chatId} ربات را بلاک کرده یا دسترسی ندارد.`);
             } else {
@@ -54,13 +53,13 @@ async function syncAndWelcomeBaleUsers() {
     console.error('خطا در همگام‌سازی کاربران بله:', err.message);
   }
 }
+
 // 🎯 بخش جدید: استخراج چندین ریلز بدون لاگین از طریق هدایت خودکار /reels/
 async function extractRandomReels(browser, count = 5) {
-  console.log(`🎲 در حال استخراج ${count} ریلز تصادفی از بخش عمومی...`);
+  console.log(`\n🎲 در حال استخراج ${count} ریلز تصادفی از بخش عمومی...`);
   const foundLinks = [];
 
   for (let i = 1; i <= count; i++) {
-    // ایجاد یک context و صفحه تازه برای اینکه کش مرورگر باعث لود تکراری نشه
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     });
@@ -69,22 +68,15 @@ async function extractRandomReels(browser, count = 5) {
     try {
       console.log(`🔄 تلاش ${i} از ${count} برای باز کردن /reels/`);
       
-      // باز کردن بخش ریلز عمومی
       await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      
-      // ۳ الی ۴ ثانیه صبر می‌کنیم تا ریدرایکت به لینک اصلی انجام بشه
       await page.waitForTimeout(4000);
 
-      // گرفتن آدرس نهایی مرورگر
       const currentUrl = page.url();
-
-      // استخراج آی‌دی و ساخت لینک تمیز ریلز
       const match = currentUrl.match(/https?:\/\/(?:www\.)?instagram\.com\/reel(?:s)?\/([A-Za-z0-9_-]+)/);
 
       if (match) {
         const reelUrl = `https://www.instagram.com/reel/${match[1]}/`;
         
-        // اگر تکراری نبود به لیست اضافه کن
         if (!foundLinks.includes(reelUrl)) {
           foundLinks.push(reelUrl);
           console.log(`✨ لینک جدید پیدا شد: ${reelUrl}`);
@@ -98,14 +90,12 @@ async function extractRandomReels(browser, count = 5) {
     } catch (err) {
       console.error(`❌ خطا در تلاش ${i}:`, err.message);
     } finally {
-      await context.close(); // بستن صفحه برای رفتن به تلاش بعدی
+      await context.close();
     }
 
-    // یک مکث کوتاه بین تلاش‌ها
     await sleep(2000);
   }
 
-  // حذف لینک‌های تکراری احتمالی
   return Array.from(new Set(foundLinks));
 }
 
@@ -115,7 +105,6 @@ async function extractReelsFromPage(page, categoryUrl) {
   await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(5000);
 
-  // اسکرول کوتاه برای لود شدن پست‌ها
   await page.evaluate(() => window.scrollBy(0, 1000));
   await page.waitForTimeout(3000);
 
@@ -132,7 +121,7 @@ async function extractReelsFromPage(page, categoryUrl) {
   return uniqueLinks;
 }
 
-// ۳. دانلود از سرویس FastDL (مقاوم‌تر در برابر تغییرات DOM)
+// ۳. دانلود از سرویس FastDL
 async function downloadReel(browser, reelUrl) {
   const downloadsDir = path.resolve('./downloads');
   if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
@@ -140,7 +129,6 @@ async function downloadReel(browser, reelUrl) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     console.log(`⏳ تلاش ${attempt} از ۳ برای دانلود ریلز: ${reelUrl}`);
     
-    // ایحاد Context جدید با تنظیمات متناسب
     const context = await browser.newContext({ 
       acceptDownloads: true,
       viewport: { width: 1280, height: 720 },
@@ -149,23 +137,18 @@ async function downloadReel(browser, reelUrl) {
     const page = await context.newPage();
 
     try {
-      // استفاده از سرویس fastdl.app
       await page.goto('https://fastdl.app/fa', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-      // یافتن اینپوت ورودی با چند سلکتور مجزا جهت اطمینان
       const inputSelector = 'input[type="search"], input[name="url"], input#search-form-input';
       await page.waitForSelector(inputSelector, { timeout: 15000 });
       await page.fill(inputSelector, reelUrl);
 
-      // کلیک روی دکمه جستجو/دانلود اولیه
       const searchBtn = await page.locator('button[type="submit"], button.search-form__btn').first();
       await searchBtn.click();
 
-      // انتظار برای تولید لینک دانلود مستقیم
       const downloadBtnSelector = 'a.button__download, a[download]';
       await page.waitForSelector(downloadBtnSelector, { timeout: 25000 });
 
-      // گرفتن مستقیم URL ویدیو و دانلود آن با axios جهت جلوگیری از گیر کردن در Eventهای Playwright
       const downloadUrl = await page.getAttribute(downloadBtnSelector, 'href');
 
       if (!downloadUrl) {
@@ -174,7 +157,6 @@ async function downloadReel(browser, reelUrl) {
 
       const filePath = path.join(downloadsDir, `${Date.now()}_reel.mp4`);
       
-      // دانلود مستقیم فایل ویدیو
       const response = await axios({
         method: 'GET',
         url: downloadUrl,
@@ -233,42 +215,7 @@ async function dispatchVideoToUsers(filePath, caption) {
         console.log(`📤 ویدیو به کاربر ${chatId} ارسال شد.`);
         sentSuccessfully = true;
         break;
-      }
-          // 🚀 اجرای بخش جدید: استخراج و دانلود ریلزهای تصادفی
-  try {
-    // عدد 5 یعنی 5 بار صفحه /reels/ رو باز کن (می‌تونی کم یا زیادش کنی)
-    const randomReelLinks = await extractRandomReels(browser, 5);
-
-    // فیلتر کردن لینک‌هایی که قبلاً فرستاده نشدن
-    const newRandomLinks = randomReelLinks.filter(link => !db.sentReels.includes(link));
-    console.log(`📊 تعداد ریلزهای جدید غیرتکراری یافت شده: ${newRandomLinks.length}`);
-
-    // فرستادن لینک‌های جدید به بخش دانلود و ارسال
-    for (const reelUrl of newRandomLinks) {
-      console.log(`🎬 در حال پردازش و دانلود: ${reelUrl}`);
-      
-      const downloadedFilePath = await downloadReel(browser, reelUrl);
-
-      if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
-        await dispatchVideoToUsers(
-          downloadedFilePath,
-          `🔥 **ریلز داغ اینستاگرام**\n\n🔗 ${reelUrl}`
-        );
-
-        // ثبت در دیتابیس جهت جلوگیری از ارسال مجدد
-        db.sentReels.push(reelUrl);
-        saveDb();
-
-        // حذف فایل موقت از دیسک
-        try {
-          fs.unlinkSync(downloadedFilePath);
-        } catch (e) {}
-      }
-    }
-  } catch (err) {
-    console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
-  }    catch (err) {
-        // اگر کاربر ربات را مسدود کرده باشد (403)، تلاش مجدد صورت نمی‌گیرد
+      } catch (err) {
         if (err.response && err.response.status === 403) {
           console.warn(`🚫 کاربر ${chatId} ربات را بلاک کرده است.`);
           break;
@@ -289,10 +236,11 @@ async function main() {
     args: [
       '--no-sandbox', 
       '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled' // برای عدم شناسایی توسط آنتی‌ربات‌ها
+      '--disable-blink-features=AutomationControlled'
     ]
   });
 
+  // ۱.۵. اجرای پردازش دسته‌بندی‌ها
   for (const category of config.categories) {
     console.log(`\n📂 شروع پردازش دسته‌بندی: ${category.name}`);
 
@@ -321,7 +269,6 @@ async function main() {
           db.sentReels.push(reelUrl);
           saveDb();
 
-          // حذف فایل موقت
           try {
             fs.unlinkSync(downloadedFilePath);
           } catch (e) {}
@@ -330,6 +277,36 @@ async function main() {
     } catch (err) {
       console.error(`💥 خطا در پردازش دسته‌بندی ${category.name}:`, err.message);
     }
+  }
+
+  // ۲.۵. اجرای بخش جدید: استخراج و دانلود ریلزهای تصادفی
+  try {
+    const randomReelLinks = await extractRandomReels(browser, 5);
+
+    const newRandomLinks = randomReelLinks.filter(link => !db.sentReels.includes(link));
+    console.log(`📊 تعداد ریلزهای جدید غیرتکراری یافت شده: ${newRandomLinks.length}`);
+
+    for (const reelUrl of newRandomLinks) {
+      console.log(`🎬 در حال پردازش و دانلود: ${reelUrl}`);
+      
+      const downloadedFilePath = await downloadReel(browser, reelUrl);
+
+      if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
+        await dispatchVideoToUsers(
+          downloadedFilePath,
+          `🔥 **ریلز داغ اینستاگرام**\n\n🔗 ${reelUrl}`
+        );
+
+        db.sentReels.push(reelUrl);
+        saveDb();
+
+        try {
+          fs.unlinkSync(downloadedFilePath);
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
   }
 
   await browser.close();
