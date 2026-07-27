@@ -1,6 +1,11 @@
 {
   "categories": [
     {
+      "name": "expelor",
+      "url": "https://www.instagram.com/reels/",
+      "limit": 10
+    },
+    {
       "name": "Persian Popular",
       "url": "https://www.instagram.com/popular/persian/?utm_source=popular_home",
       "limit": 4
