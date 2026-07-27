@@ -282,7 +282,7 @@ async function main() {
 
   // ۲.۵. اجرای بخش جدید: استخراج و دانلود ریلزهای تصادفی
   try {
-    const randomReelLinks = await extractRandomReels(browser, 5);
+    const randomReelLinks = await extractRandomReels(browser, count);
 
     const newRandomLinks = randomReelLinks.filter(link => !db.sentReels.includes(link));
     console.log(`📊 تعداد ریلزهای جدید غیرتکراری یافت شده: ${newRandomLinks.length}`);
