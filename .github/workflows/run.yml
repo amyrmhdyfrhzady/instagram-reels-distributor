@@ -19,13 +19,50 @@ jobs:
           npm install
           npx playwright install chromium
 
-      - name: Run
+      - name: Run Distributor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
         run: node src/main.js
 
-      - name: Commit
+  send:
+    needs: run
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: |
+          npm install
+          npx playwright install chromium
+
+      - name: Run Sender
+        env:
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node index.js
+
+      - name: Commit Database
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+
+          git add database/
+          git add downloads/
+
+          git diff --cached --quiet || git commit -m "Update database"
+
+          git push
+
+      - name: Commit Downloads
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
