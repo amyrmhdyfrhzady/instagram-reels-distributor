@@ -85,11 +85,7 @@ async function downloadWithBlastup(browser, reelUrl) {
     const page = await context.newPage();
 
     try {
-      await page.goto('https://blastup.com/instagram-downloader', {
-        waitUntil: 'networkidle',
-        timeout: 45000
-      });
-
+      await page.goto('https://blastup.com/instagram-downloader', { waitUntil: 'domcontentloaded' });
       const inputSelector = 'input#link.form-control';
       await page.waitForSelector(inputSelector, { timeout: 15000 });
       await page.fill(inputSelector, reelUrl);
