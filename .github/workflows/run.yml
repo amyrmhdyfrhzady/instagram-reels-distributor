@@ -4,71 +4,34 @@ on:
   workflow_dispatch:
 
 jobs:
-  run:
+  run-distributor:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
+          cache: 'npm'
 
-      - name: Install
-        run: |
-          npm install
-          npx playwright install chromium
+      - name: Install Dependencies
+        run: npm ci
 
-      - name: Run Distributor
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-        run: node src/main.js
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
 
-  send:
-    needs: run
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install
-        run: |
-          npm install
-          npx playwright install chromium
-
-      - name: Run Sender
+      - name: Run Distributor Script
         env:
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node index.js
 
-      - name: Commit Database
+      - name: Commit and Push Updated Database
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-
-          git add database/
-          git add downloads/
-
-          git diff --cached --quiet || git commit -m "Update database"
-
-          git push
-
-      - name: Commit Downloads
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-
-          git add .
-
-          git diff --cached --quiet || git commit -m "Update downloaded reels"
-
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add database.json
+          git commit -m "Auto-update sent reels and users [skip ci]" || exit 0
           git push
