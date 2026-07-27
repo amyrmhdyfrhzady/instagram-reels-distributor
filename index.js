@@ -56,18 +56,21 @@ async function syncAndWelcomeBaleUsers() {
 
 // 🎯 بخش جدید: استخراج چندین ریلز بدون لاگین از طریق هدایت خودکار /reels/
 const count = config.randomReelsCount || 3;
-async function extractRandomReels(browser, count) {
-  console.log(`\n🎲 در حال استخراج ${count} ریلز تصادفی از بخش عمومی...`);
+async function extractRandomReels(browser, count = 5) {
+  console.log(`\n🎲 در حال دریافت ${count} ریلز جدید و غیرتکراری از بخش عمومی...`);
   const foundLinks = [];
+  let attempts = 0;
+  const maxAttempts = count * 3; // حداکثر تلاش برای جلوگیری از حلقه بی‌نهایت
 
-  for (let i = 1; i <= count; i++) {
+  while (foundLinks.length < count && attempts < maxAttempts) {
+    attempts++;
     const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     });
     const page = await context.newPage();
 
     try {
-      console.log(`🔄 تلاش ${i} از ${count} برای باز کردن /reels/`);
+      console.log(`🔄 تلاش ${attempts} (یافته شده: ${foundLinks.length} از ${count}) برای باز کردن /reels/`);
       
       await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(4000);
@@ -78,18 +81,24 @@ async function extractRandomReels(browser, count) {
       if (match) {
         const reelUrl = `https://www.instagram.com/reel/${match[1]}/`;
         
-        if (!foundLinks.includes(reelUrl)) {
+        // بررسی هم‌زمان اینکه: ۱. توی آرایه فعلی نباشه  ۲. قبلاً در دیتابیس ارسال نشده باشه
+        const isAlreadyInList = foundLinks.includes(reelUrl);
+        const isAlreadyInDb = db.sentReels.includes(reelUrl);
+
+        if (!isAlreadyInList && !isAlreadyInDb) {
           foundLinks.push(reelUrl);
-          console.log(`✨ لینک جدید پیدا شد: ${reelUrl}`);
+          console.log(`✨ لینک جدید و خالص پیدا شد (${foundLinks.length}/${count}): ${reelUrl}`);
+        } else if (isAlreadyInDb) {
+          console.log(`ℹ️ لینک قبلاً ارسال شده بود (در دیتابیس موجود است)، رد شد.`);
         } else {
-          console.log(`ℹ️ لینک تکراری بود، صرف‌نظر شد.`);
+          console.log(`ℹ️ لینک توی همین نوبت تکراری دریافت شد، رد شد.`);
         }
       } else {
         console.log(`⚠️ ریدرایکت به ریلز انجام نشد.`);
       }
 
     } catch (err) {
-      console.error(`❌ خطا در تلاش ${i}:`, err.message);
+      console.error(`❌ خطا در تلاش ${attempts}:`, err.message);
     } finally {
       await context.close();
     }
@@ -97,8 +106,10 @@ async function extractRandomReels(browser, count) {
     await sleep(2000);
   }
 
-  return Array.from(new Set(foundLinks));
+  console.log(`✅ خروجی نهایی: ${foundLinks.length} ریلز خالص برای دانلود آماده شد.`);
+  return foundLinks;
 }
+
 
 // ۲. استخراج لینک ریلزها مستقیماً از DOM
 async function extractReelsFromPage(page, categoryUrl) {
@@ -284,10 +295,7 @@ async function main() {
   try {
     const randomReelLinks = await extractRandomReels(browser, count);
 
-    const newRandomLinks = randomReelLinks.filter(link => !db.sentReels.includes(link));
-    console.log(`📊 تعداد ریلزهای جدید غیرتکراری یافت شده: ${newRandomLinks.length}`);
-
-    for (const reelUrl of newRandomLinks) {
+    for (const reelUrl of randomReelLinks) {
       console.log(`🎬 در حال پردازش و دانلود: ${reelUrl}`);
       
       const downloadedFilePath = await downloadReel(browser, reelUrl);
@@ -306,6 +314,9 @@ async function main() {
         } catch (e) {}
       }
     }
+  } catch (err) {
+    console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
+  }
   } catch (err) {
     console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
   }
