@@ -28,6 +28,13 @@ jobs:
         env:
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
         run: node index.js
+        
+      - name: Upload Debug Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: debug-*.png
 
       - name: Commit and Push changes
         run: |
