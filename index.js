@@ -3,21 +3,33 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import FormData from 'form-data';
+import { execSync } from 'child_process';
 
-const config = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
+const configPath = './config.json';
+let config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const dbPath = './database.json';
 let db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
 
+// اطمینان از وجود ساختار فیلدهای جدید در دیتابیس
+if (!db.reactions) db.reactions = {};
+if (!db.sentReels) db.sentReels = [];
+if (!db.users) db.users = [];
+
 const BALE_BOT_TOKEN = process.env.BALE_BOT_TOKEN;
 const STATE_PATH = './state.json';
+const WATERMARK_PATH = './watermark.png'; // تصویر لوگوی شفاف برای واترمارک
 
 function saveDb() {
   fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 }
 
+function saveConfig() {
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// 🛠️ تابع اصلاح‌شده و دقیق برای ساخت Context و اعتبارسنجی لاگین
+// 🛠️ تابع ساخت Context و اعتبارسنجی لاگین
 async function createInstagramContext(browser, customOptions = {}) {
   const baseOptions = {
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -39,7 +51,6 @@ async function createInstagramContext(browser, customOptions = {}) {
         await testPage.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
         await testPage.waitForTimeout(4000);
 
-        // بررسی المان‌های اختصاصی کاربران لاگین‌شده
         const isLoggedIn = await testPage.evaluate(() => {
           const hasProfile = !!document.querySelector('img[alt*="profile"]');
           const hasNav = !!document.querySelector('svg[aria-label="Home"], svg[aria-label="خانه"]');
@@ -70,7 +81,7 @@ async function createInstagramContext(browser, customOptions = {}) {
   return { context: guestContext, isLoggedIn: false };
 }
 
-// ۱. همگام‌سازی کاربران بله
+// 👑 ایده ۳: دستورات پنل مدیریت ادمین + ثبت بازخورد (ایده ۶)
 async function syncAndWelcomeBaleUsers() {
   if (!BALE_BOT_TOKEN) {
     console.log('⚠️ توکن بله یافت نشد.');
@@ -82,7 +93,35 @@ async function syncAndWelcomeBaleUsers() {
     if (res.data && res.data.ok) {
       for (const update of res.data.result) {
         const chatId = update.message?.chat?.id;
+        const text = update.message?.text?.trim();
+        const callbackQuery = update.callback_query;
 
+        // ۱.۳ پردازش کلیک روی دکمه‌های شیشه‌ای لایک/دیس‌لایک
+        if (callbackQuery) {
+          const data = callbackQuery.data; // e.g., "like_REEL_ID" or "dislike_REEL_ID"
+          const fromId = callbackQuery.from.id;
+
+          if (data.startsWith('like_') || data.startsWith('dislike_')) {
+            const [action, reelId] = data.split('_');
+            if (!db.reactions[reelId]) db.reactions[reelId] = { likes: 0, dislikes: 0, users: {} };
+
+            // ثبت واکنش کاربر
+            if (!db.reactions[reelId].users[fromId]) {
+              db.reactions[reelId].users[fromId] = action;
+              if (action === 'like') db.reactions[reelId].likes++;
+              else db.reactions[reelId].dislikes++;
+              saveDb();
+
+              await axios.post(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/answerCallbackQuery`, {
+                callback_query_id: callbackQuery.id,
+                text: action === 'like' ? '👍 نظر شما ثبت شد!' : '👎 نظر شما ثبت شد.'
+              });
+            }
+          }
+          continue;
+        }
+
+        // ۲.۳ ثبت کاربر جدید
         if (chatId && !db.users.includes(chatId)) {
           db.users.push(chatId);
           saveDb();
@@ -97,6 +136,40 @@ async function syncAndWelcomeBaleUsers() {
             console.error(`خطا در ارسال پیام خوش‌آمدگویی به ${chatId}:`, e.message);
           }
         }
+
+        // ۳.۳ دستورات ادمین
+        const isAdmin = config.adminId && String(chatId) === String(config.adminId);
+        if (isAdmin && text) {
+          if (text === '/status') {
+            await axios.post(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendMessage`, {
+              chat_id: chatId,
+              text: `📊 **وضعیت ربات:**\n👥 تعداد کاربران: ${db.users.length}\n🎥 ریلزهای ارسالی: ${db.sentReels.length}\n📂 تعداد دسته‌بندی‌ها: ${config.categories.length}`
+            });
+          } else if (text.startsWith('/addcat ')) {
+            const parts = text.split(' ');
+            if (parts.length >= 3) {
+              const name = parts[1];
+              const url = parts[2];
+              config.categories.push({ name, url, limit: 2 });
+              saveConfig();
+              await axios.post(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendMessage`, {
+                chat_id: chatId,
+                text: `✅ دسته‌بندی جديد "${name}" اضافه شد.`
+              });
+            }
+          } else if (text === '/stats') {
+            let totalLikes = 0;
+            let totalDislikes = 0;
+            Object.values(db.reactions).forEach(r => {
+              totalLikes += r.likes || 0;
+              totalDislikes += r.dislikes || 0;
+            });
+            await axios.post(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendMessage`, {
+              chat_id: chatId,
+              text: `📈 **آمار واکنش‌ها:**\n👍 کل لایک‌ها: ${totalLikes}\n👎 کل دیس‌لایک‌ها: ${totalDislikes}`
+            });
+          }
+        }
       }
     }
   } catch (err) {
@@ -104,13 +177,12 @@ async function syncAndWelcomeBaleUsers() {
   }
 }
 
-// ۲. استخراج لینک ریلزها از صفحات دسته‌بندی
+// استخراج لینک ریلزها از صفحات دسته‌بندی
 async function extractReelsFromPage(browser, categoryUrl) {
   console.log(`📡 در حال باز کردن و استخراج HTML دسته‌بندی: ${categoryUrl}`);
   
   const { context, isLoggedIn } = await createInstagramContext(browser);
   const page = await context.newPage();
-
   let uniqueLinks = [];
 
   try {
@@ -118,13 +190,11 @@ async function extractReelsFromPage(browser, categoryUrl) {
     await page.goto(categoryUrl, { waitUntil: 'networkidle', timeout: 60000 });
     await page.waitForTimeout(5000);
 
-    // اسکرول برای لود شدن پست‌ها
     for (let i = 0; i < 5; i++) {
       await page.evaluate(() => window.scrollBy(0, 1200));
       await page.waitForTimeout(2500);
     }
 
-    // استخراج لینک‌ها مستقیماً از DOM و Regex
     const hrefs = await page.evaluate(() => {
       return Array.from(document.querySelectorAll('a'))
         .map(a => a.href)
@@ -154,7 +224,7 @@ async function extractReelsFromPage(browser, categoryUrl) {
   return uniqueLinks;
 }
 
-// ۳. استخراج ریلزهای تصادفی
+// استخراج ریلزهای تصادفی
 async function extractRandomReels(browser, count = 5) {
   console.log(`\n🎲 در حال دریافت ${count} ریلز جدید...`);
   const foundLinks = [];
@@ -168,8 +238,6 @@ async function extractRandomReels(browser, count = 5) {
     const page = await context.newPage();
 
     try {
-      console.log(`🔄 تلاش ${attempts} (یافته شده: ${foundLinks.length} از ${count}) | لاگین: ${isLoggedIn ? 'بله' : 'خیر'}`);
-      
       await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(4000);
 
@@ -195,16 +263,34 @@ async function extractRandomReels(browser, count = 5) {
   return foundLinks;
 }
 
-// ۳. دانلود از سرویس FastDL با شرط حداقل حجم فایل
+// 🖌️ ایده ۴: چسباندن واترمارک روی ویدیو با استفاده از FFmpeg
+function applyWatermark(inputPath) {
+  if (!fs.existsSync(WATERMARK_PATH)) return inputPath; // اگر لوگو نبود، ویدیو دست‌نخورده برمی‌گردد
+
+  const outputPath = inputPath.replace('.mp4', '_wm.mp4');
+  try {
+    console.log('🎨 در حال چسباندن واترمارک روی ویدیو...');
+    // چسباندن واترمارک به گوشه بالا سمت راست (۱۰ پیکسل فاصله از لبه‌ها)
+    execSync(`ffmpeg -y -i "${inputPath}" -i "${WATERMARK_PATH}" -filter_complex "overlay=main_w-overlay_w-10:10" "${outputPath}"`, { stdio: 'ignore' });
+    
+    fs.unlinkSync(inputPath); // حذف ویدیو بدون واترمارک
+    return outputPath;
+  } catch (err) {
+    console.error('⚠️ خطا در اعمال واترمارک FFmpeg:', err.message);
+    return inputPath;
+  }
+}
+
+// 🔄 ایده ۵: دانلود از FastDL و سیستم دانلود رزرو (Fallback) با yt-dlp
 async function downloadReel(browser, reelUrl) {
   const downloadsDir = path.resolve('./downloads');
   if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
-  const MIN_FILE_SIZE_BYTES = 500 * 1024; // حداقل ۵۰۰ کیلوبایت برای ویدیو معتبر
+  const MIN_FILE_SIZE_BYTES = 500 * 1024; // حداقل ۵۰۰ کیلوبایت
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    console.log(`⏳ تلاش ${attempt} از ۳ برای دانلود ریلز: ${reelUrl}`);
-    
+  // روش اصلی: FastDL
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    console.log(`⏳ [FastDL] تلاش ${attempt} برای دانلود: ${reelUrl}`);
     const context = await browser.newContext({ 
       viewport: { width: 1280, height: 720 },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -213,7 +299,6 @@ async function downloadReel(browser, reelUrl) {
 
     try {
       await page.goto('https://fastdl.app/fa', { waitUntil: 'domcontentloaded', timeout: 30000 });
-
       const inputSelector = 'input[type="search"], input[name="url"], input#search-form-input';
       await page.waitForSelector(inputSelector, { timeout: 15000 });
       await page.fill(inputSelector, reelUrl);
@@ -223,61 +308,74 @@ async function downloadReel(browser, reelUrl) {
 
       const downloadBtnSelector = 'a.button__download, a[download]';
       await page.waitForSelector(downloadBtnSelector, { timeout: 25000 });
-
       const downloadUrl = await page.getAttribute(downloadBtnSelector, 'href');
 
-      if (!downloadUrl) throw new Error('لینک دانلود ویدیو یافت نشد.');
+      if (downloadUrl) {
+        const filePath = path.join(downloadsDir, `${Date.now()}_reel.mp4`);
+        const response = await axios({ method: 'GET', url: downloadUrl, responseType: 'stream', timeout: 60000 });
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
 
-      const filePath = path.join(downloadsDir, `${Date.now()}_reel.mp4`);
-      
-      const response = await axios({
-        method: 'GET',
-        url: downloadUrl,
-        responseType: 'stream',
-        timeout: 60000,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
+        await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
+        await context.close();
 
-      const writer = fs.createWriteStream(filePath);
-      response.data.pipe(writer);
-
-      await new Promise((resolve, reject) => {
-        writer.on('finish', resolve);
-        writer.on('error', reject);
-      });
-
-      await context.close();
-
-      // 📏 بررسی حجم فایل دانلود شده
-      const stats = fs.statSync(filePath);
-      if (stats.size < MIN_FILE_SIZE_BYTES) {
-        console.warn(`⚠️ ویدیو دانلود شده بسیار کم‌حجم است (${(stats.size / 1024).toFixed(1)} KB). احتمالا فایل خراب است!`);
-        fs.unlinkSync(filePath); // حذف فایل کم‌حجم
-        return null; // رد شدن از این فایل
+        const stats = fs.statSync(filePath);
+        if (stats.size >= MIN_FILE_SIZE_BYTES) {
+          console.log(`✅ [FastDL] دانلود موفق: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
+          return applyWatermark(filePath);
+        } else {
+          fs.unlinkSync(filePath);
+        }
       }
-
-      console.log(`✅ دانلود موفق و معتبر (${(stats.size / (1024 * 1024)).toFixed(2)} MB): ${filePath}`);
-      return filePath;
-
     } catch (err) {
-      console.error(`❌ تلاش ${attempt} ناموفق بود: ${err.message}`);
       await context.close();
-      await sleep(3000);
     }
+  }
+
+  // 🛡️ روش رزرو (Fallback): استفاده از yt-dlp
+  console.log(`🔄 [yt-dlp Fallback] تلاش با استفاده از دانلودر رزرو yt-dlp...`);
+  try {
+    const fallbackPath = path.join(downloadsDir, `${Date.now()}_ytdlp.mp4`);
+    execSync(`npx yt-dlp -o "${fallbackPath}" "${reelUrl}"`, { stdio: 'ignore' });
+
+    if (fs.existsSync(fallbackPath)) {
+      const stats = fs.statSync(fallbackPath);
+      if (stats.size >= MIN_FILE_SIZE_BYTES) {
+        console.log(`✅ [yt-dlp] دانلود موفق رزرو: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
+        return applyWatermark(fallbackPath);
+      } else {
+        fs.unlinkSync(fallbackPath);
+      }
+    }
+  } catch (fallbackErr) {
+    console.error(`❌ [yt-dlp] خطا در دانلود رزرو: ${fallbackErr.message}`);
   }
 
   return null;
 }
 
-// ۵. ارسال پیام به بله
-async function dispatchVideoToUsers(filePath, caption) {
+// 📤 ارسال ویدیو به کاربران همراه با دکمه‌های شیشه‌ای لایک/دیس‌لایک (ایده ۶)
+async function dispatchVideoToUsers(filePath, caption, reelUrl) {
   if (!BALE_BOT_TOKEN || db.users.length === 0) return;
+
+  const reelId = reelUrl.match(/\/reel\/([A-Za-z0-9_-]+)/)?.[1] || Date.now();
+
+  // ساخت کیبورد شیشه‌ای برای نظرسنجی/لایک
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        { text: '👍 عالی بود', callback_data: `like_${reelId}` },
+        { text: '👎 خوشم نیومد', callback_data: `dislike_${reelId}` }
+      ]
+    ]
+  };
 
   for (const chatId of db.users) {
     try {
       const formData = new FormData();
       formData.append('chat_id', chatId);
       formData.append('caption', caption);
+      formData.append('reply_markup', JSON.stringify(replyMarkup));
       formData.append('video', fs.createReadStream(filePath));
 
       await axios.post(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendVideo`, formData, {
@@ -292,8 +390,7 @@ async function dispatchVideoToUsers(filePath, caption) {
   }
 }
 
-// ۶. اجرا
-// ۶. اجرای اصلی با تضمین ارسال دقیق تعداد مورد نیاز
+// ۶. اجرای اصلی
 async function main() {
   await syncAndWelcomeBaleUsers();
 
@@ -308,8 +405,6 @@ async function main() {
 
     try {
       const allExtractedLinks = await extractReelsFromPage(browser, category.url);
-      
-      // فیلتر لینک‌های تکراری
       const availableLinks = allExtractedLinks.filter((link) => !db.sentReels.includes(link));
       console.log(`✨ لینک‌های غیرتکراری آماده بررسی: ${availableLinks.length}`);
 
@@ -317,43 +412,39 @@ async function main() {
       let successfulDispatches = 0;
       let linkIndex = 0;
 
-      // 🔄 حلقه ادامه می‌یابد تا زمانی که دقیقاً به تعداد targetLimit ویدیو ارسال شود یا لینک‌ها تمام شوند
       while (successfulDispatches < targetLimit && linkIndex < availableLinks.length) {
         const reelUrl = availableLinks[linkIndex];
         linkIndex++;
 
-        console.log(`\n🎬 بررسی لینک (${linkIndex}/${availableLinks.length}) برای دسته‌بندی #${category.name}: ${reelUrl}`);
-
+        console.log(`\n🎬 بررسی لینک (${linkIndex}/${availableLinks.length}) برای #${category.name}: ${reelUrl}`);
         const downloadedFilePath = await downloadReel(browser, reelUrl);
 
         if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
-          // ارسال ویدیو به کاربران
           await dispatchVideoToUsers(
             downloadedFilePath,
-            `🎥 ریلز جدید از دسته‌بندی #${category.name}\n\n🔗 ${reelUrl}`
+            `🎥 ریلز جدید از دسته‌بندی #${category.name}\n\n🔗 ${reelUrl}`,
+            reelUrl
           );
 
-          // ثبت در دیتابیس پس از ارسال موفق
           db.sentReels.push(reelUrl);
           saveDb();
           successfulDispatches++;
 
           console.log(`🎯 ارسال موفق (${successfulDispatches}/${targetLimit}) برای دسته‌بندی ${category.name}`);
-
           try { fs.unlinkSync(downloadedFilePath); } catch (e) {}
         } else {
-          console.log(`⏭️ لینک ${reelUrl} به دلیل حجم کم یا عدم دانلود رد شد. رفتن به لینک بعدی...`);
+          console.log(`⏭️ لینک ${reelUrl} به دلیل عدم دانلود یا حجم کم رد شد.`);
         }
       }
 
-      console.log(`📊 نتیجه دسته‌بندی ${category.name}: ارسال ${successfulDispatches} از ${targetLimit} ریلز درخواستی.`);
+      console.log(`📊 نتیجه دسته‌بندی ${category.name}: ارسال ${successfulDispatches} از ${targetLimit} ریلز.`);
 
     } catch (err) {
       console.error(`💥 خطا در پردازش دسته‌بندی ${category.name}:`, err.message);
     }
   }
 
-  // ۲.۶ پردازش ریلزهای تصادفی با تضمین سقف درخواستی
+  // ۲.۶ پردازش ریلزهای تصادفی
   try {
     const randomTargetCount = config.randomReelsCount || 3;
     let randomDispatches = 0;
@@ -361,7 +452,6 @@ async function main() {
     console.log(`\n🎲 در حال دریافت و ارسال ${randomTargetCount} ریلز تصادفی معتبر...`);
 
     while (randomDispatches < randomTargetCount) {
-      // استخراج یک ریلز تصادفی در هر مرحله
       const randomLinks = await extractRandomReels(browser, 1);
       
       if (randomLinks.length === 0) {
@@ -375,7 +465,8 @@ async function main() {
       if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
         await dispatchVideoToUsers(
           downloadedFilePath,
-          `🔥 **ریلز داغ اینستاگرام**\n\n🔗 ${reelUrl}`
+          `🔥 **ریلز داغ اینستاگرام**\n\n🔗 ${reelUrl}`,
+          reelUrl
         );
 
         db.sentReels.push(reelUrl);
@@ -383,10 +474,9 @@ async function main() {
         randomDispatches++;
 
         console.log(`🎯 ریلز تصادفی موفق (${randomDispatches}/${randomTargetCount})`);
-
         try { fs.unlinkSync(downloadedFilePath); } catch (e) {}
       } else {
-        console.log(`⏭️ ریلز تصادفی ${reelUrl} رد شد. تلاش مجدد...`);
+        console.log(`⏭️ ریلز تصادفی ${reelUrl} رد شد.`);
       }
     }
   } catch (err) {
@@ -396,4 +486,5 @@ async function main() {
   await browser.close();
   console.log('\n🏁 تمام مراحل به پایان رسید.');
 }
-main()
+
+main();
