@@ -1,0 +1,15 @@
+{
+  "cookies": [
+    {
+      "name": "sessionid",
+      "value": "39415397250%3AxrX6o0GuUhNttR%3A7%3AAYjWYB0oUXBUfZARQ8A3G79_Hbp87LoifV1t8FfklQ",
+      "domain": ".instagram.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}
