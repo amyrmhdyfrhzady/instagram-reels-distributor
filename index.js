@@ -30,26 +30,57 @@ function saveConfig() {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // 🛠️ تابع ساخت Context و اعتبارسنجی لاگین
+// 🎭 لیست User-Agentهای واقعی جهت چرخش و جلوگیری از بلاک
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+];
+
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+function getRandomViewport() {
+  const widths = [1280, 1366, 1440, 1536, 1920];
+  const heights = [720, 768, 900, 864, 1080];
+  const idx = Math.floor(Math.random() * widths.length);
+  return { width: widths[idx], height: heights[idx] };
+}
+
+// 🛠️ تابع ارتقایافته ضد بلاک (Anti-Detect)
 async function createInstagramContext(browser, customOptions = {}) {
   const baseOptions = {
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    viewport: { width: 1280, height: 800 },
+    userAgent: getRandomUserAgent(),
+    viewport: getRandomViewport(),
     locale: 'en-US',
+    timezoneId: 'America/New_York',
     ...customOptions
   };
 
   let context;
+  
+  const setupAntiDetect = async (ctx) => {
+    // دور زدن المان‌های شناسایی اتومیشن
+    await ctx.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      window.chrome = { runtime: {} };
+    });
+  };
+
   if (fs.existsSync(STATE_PATH)) {
     try {
       context = await browser.newContext({
         ...baseOptions,
         storageState: STATE_PATH
       });
-      
+      await setupAntiDetect(context);
+
       const testPage = await context.newPage();
       try {
         await testPage.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await testPage.waitForTimeout(4000);
+        await testPage.waitForTimeout(3000 + Math.random() * 2000); // تاخیر تصادفی انسانی
 
         const isLoggedIn = await testPage.evaluate(() => {
           const hasProfile = !!document.querySelector('img[alt*="profile"]');
@@ -64,6 +95,7 @@ async function createInstagramContext(browser, customOptions = {}) {
           console.warn('⚠️ سشن منقضی شده یا کوکی sessionid معتبر نیست.');
           await context.close();
           const guestContext = await browser.newContext(baseOptions);
+          await setupAntiDetect(guestContext);
           return { context: guestContext, isLoggedIn: false };
         }
 
@@ -78,6 +110,7 @@ async function createInstagramContext(browser, customOptions = {}) {
   }
 
   const guestContext = await browser.newContext(baseOptions);
+  await setupAntiDetect(guestContext);
   return { context: guestContext, isLoggedIn: false };
 }
 
@@ -282,77 +315,104 @@ function applyWatermark(inputPath) {
 }
 
 // 🔄 ایده ۵: دانلود از FastDL و سیستم دانلود رزرو (Fallback) با yt-dlp
+// 🔄 تابع دانلود فوق‌سریع و هوشمند (ترکیب yt-dlp مستقیم + FastDL به عنوان پشتیبان)
 async function downloadReel(browser, reelUrl) {
   const downloadsDir = path.resolve('./downloads');
   if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
 
-  const MIN_FILE_SIZE_BYTES = 500 * 1024; // حداقل ۵۰۰ کیلوبایت
+  const MIN_FILE_SIZE_BYTES = 300 * 1024; // حداقل ۳۰۰ کیلوبایت
+  const filePath = path.join(downloadsDir, `${Date.now()}_reel.mp4`);
 
-  // روش اصلی: FastDL
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    console.log(`⏳ [FastDL] تلاش ${attempt} برای دانلود: ${reelUrl}`);
-    const context = await browser.newContext({ 
-      viewport: { width: 1280, height: 720 },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    });
-    const page = await context.newPage();
-
-    try {
-      await page.goto('https://fastdl.app/fa', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      const inputSelector = 'input[type="search"], input[name="url"], input#search-form-input';
-      await page.waitForSelector(inputSelector, { timeout: 15000 });
-      await page.fill(inputSelector, reelUrl);
-
-      const searchBtn = await page.locator('button[type="submit"], button.search-form__btn').first();
-      await searchBtn.click();
-
-      const downloadBtnSelector = 'a.button__download, a[download]';
-      await page.waitForSelector(downloadBtnSelector, { timeout: 25000 });
-      const downloadUrl = await page.getAttribute(downloadBtnSelector, 'href');
-
-      if (downloadUrl) {
-        const filePath = path.join(downloadsDir, `${Date.now()}_reel.mp4`);
-        const response = await axios({ method: 'GET', url: downloadUrl, responseType: 'stream', timeout: 60000 });
-        const writer = fs.createWriteStream(filePath);
-        response.data.pipe(writer);
-
-        await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
-        await context.close();
-
-        const stats = fs.statSync(filePath);
-        if (stats.size >= MIN_FILE_SIZE_BYTES) {
-          console.log(`✅ [FastDL] دانلود موفق: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
-          return applyWatermark(filePath);
-        } else {
-          fs.unlinkSync(filePath);
+  // 🚀 اولویت اول (سریع‌ترین روش): دانلود مستقیم با yt-dlp بدون باز کردن مرورگر
+  console.log(`⚡ [yt-dlp] تلاش سریع برای دانلود: ${reelUrl}`);
+  try {
+    // اگر فایل state.json وجود داشته باشد، کوکی لاگین را استخراج می‌کنیم تا اینستاگرام بلاک نکند
+    let cookieCmd = '';
+    if (fs.existsSync(STATE_PATH)) {
+      try {
+        const stateData = JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
+        if (stateData.cookies) {
+          const cookiePath = path.join(downloadsDir, 'cookies.txt');
+          let cookieText = "# Netscape HTTP Cookie File\n";
+          stateData.cookies.forEach(c => {
+            cookieText += `${c.domain}\tTRUE\t${c.path}\t${c.secure ? 'TRUE' : 'FALSE'}\t${Math.floor(c.expires)}\t${c.name}\t${c.value}\n`;
+          });
+          fs.writeFileSync(cookiePath, cookieText);
+          cookieCmd = `--cookies "${cookiePath}"`;
         }
+      } catch (e) {
+        // نادیده گرفتن خطای کوکی
       }
-    } catch (err) {
-      await context.close();
     }
+
+    // اجرای مستقیم دستور سیستم‌عاملی yt-dlp (بدون npx) با تایم‌آوت ۱۵ ثانیه
+    execSync(`yt-dlp ${cookieCmd} --no-warnings --socket-timeout 10 -o "${filePath}" "${reelUrl}"`, { 
+      stdio: 'ignore',
+      timeout: 20000 
+    });
+
+    if (fs.existsSync(filePath)) {
+      const stats = fs.statSync(filePath);
+      if (stats.size >= MIN_FILE_SIZE_BYTES) {
+        console.log(`✅ [yt-dlp] دانلود موفق زیر چند ثانیه: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
+        return applyWatermark(filePath);
+      } else {
+        fs.unlinkSync(filePath);
+      }
+    }
+  } catch (err) {
+    console.warn(`⚠️ [yt-dlp] رد شد یا موفق نبود، رفتن سراغ FastDL...`);
+    if (fs.existsSync(filePath)) try { fs.unlinkSync(filePath); } catch (e) {}
   }
 
-  // 🛡️ روش رزرو (Fallback): استفاده از yt-dlp
-  console.log(`🔄 [yt-dlp Fallback] تلاش با استفاده از دانلودر رزرو yt-dlp...`);
-  try {
-    const fallbackPath = path.join(downloadsDir, `${Date.now()}_ytdlp.mp4`);
-    execSync(`npx yt-dlp -o "${fallbackPath}" "${reelUrl}"`, { stdio: 'ignore' });
+  // 🛡️ اولویت دوم (پشتیبان): دانلود از FastDL با تایم‌آوت بسیار کوتاه جهت جلوگیری از اتلاف وقت
+  console.log(`⏳ [FastDL Fallback] تلاش با وب‌سایت FastDL...`);
+  const context = await browser.newContext({ 
+    viewport: { width: 1280, height: 720 },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+  });
+  const page = await context.newPage();
 
-    if (fs.existsSync(fallbackPath)) {
-      const stats = fs.statSync(fallbackPath);
+  try {
+    // تایم‌آوت کوتاه ۱۰ ثانیه‌ای
+    await page.goto('https://fastdl.app/fa', { waitUntil: 'domcontentloaded', timeout: 10000 });
+    const inputSelector = 'input[type="search"], input[name="url"], input#search-form-input';
+    
+    await page.waitForSelector(inputSelector, { timeout: 5000 });
+    await page.fill(inputSelector, reelUrl);
+
+    const searchBtn = await page.locator('button[type="submit"], button.search-form__btn').first();
+    await searchBtn.click();
+
+    const downloadBtnSelector = 'a.button__download, a[download]';
+    await page.waitForSelector(downloadBtnSelector, { timeout: 8000 });
+    const downloadUrl = await page.getAttribute(downloadBtnSelector, 'href');
+
+    if (downloadUrl) {
+      const response = await axios({ method: 'GET', url: downloadUrl, responseType: 'stream', timeout: 30000 });
+      const writer = fs.createWriteStream(filePath);
+      response.data.pipe(writer);
+
+      await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
+      await context.close();
+
+      const stats = fs.statSync(filePath);
       if (stats.size >= MIN_FILE_SIZE_BYTES) {
-        console.log(`✅ [yt-dlp] دانلود موفق رزرو: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
-        return applyWatermark(fallbackPath);
+        console.log(`✅ [FastDL] دانلود موفق: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
+        return applyWatermark(filePath);
       } else {
-        fs.unlinkSync(fallbackPath);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }
     }
-  } catch (fallbackErr) {
-    console.error(`❌ [yt-dlp] خطا در دانلود رزرو: ${fallbackErr.message}`);
+  } catch (err) {
+    console.error(`❌ [FastDL] خطا یا تایم‌آوت FastDL: ${err.message}`);
+    await context.close();
+    if (fs.existsSync(filePath)) try { fs.unlinkSync(filePath); } catch (e) {}
   }
 
   return null;
 }
+
 
 // 📤 ارسال ویدیو به کاربران همراه با دکمه‌های شیشه‌ای لایک/دیس‌لایک (ایده ۶)
 async function dispatchVideoToUsers(filePath, caption, reelUrl) {
