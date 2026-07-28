@@ -9,7 +9,7 @@ const dbPath = './database.json';
 let db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
 
 const BALE_BOT_TOKEN = process.env.BALE_BOT_TOKEN;
-const STATE_PATH = './state.json'; // 🔑 مسیر فایل کوکی‌های اکانت
+const STATE_PATH = './state.json';
 
 function saveDb() {
   fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
@@ -17,31 +17,40 @@ function saveDb() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// 🛠️ تابع کمکی اصلاح‌شده برای بررسی دقیق و واقعی لاگین بودن اکانت
+// 🛠️ تابع اصلاح‌شده و دقیق برای ساخت Context و اعتبارسنجی لاگین
 async function createInstagramContext(browser, customOptions = {}) {
   const baseOptions = {
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    viewport: { width: 1280, height: 800 },
+    locale: 'en-US',
     ...customOptions
   };
 
+  let context;
   if (fs.existsSync(STATE_PATH)) {
     try {
-      const context = await browser.newContext({
+      context = await browser.newContext({
         ...baseOptions,
         storageState: STATE_PATH
       });
       
-      // تست واقعی اینکه آیا سشن معتبر است یا خیر
       const testPage = await context.newPage();
       try {
-        await testPage.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await testPage.waitForTimeout(3000);
-        const currentUrl = testPage.url();
+        await testPage.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await testPage.waitForTimeout(4000);
+
+        // بررسی المان‌های اختصاصی کاربران لاگین‌شده
+        const isLoggedIn = await testPage.evaluate(() => {
+          const hasProfile = !!document.querySelector('img[alt*="profile"]');
+          const hasNav = !!document.querySelector('svg[aria-label="Home"], svg[aria-label="خانه"]');
+          const hasLoginForm = !!document.querySelector('input[name="username"]');
+          return (hasProfile || hasNav) && !hasLoginForm;
+        });
+
         await testPage.close();
 
-        // اگر به صفحه لاگین ریدایرکت شد یعنی کوکی نامعتبر یا سشن خالی است
-        if (currentUrl.includes('/accounts/login/')) {
-          console.warn('⚠️ فایل state.json موجود است اما سشن منقضی شده یا Session ID نامعتبر/خالی است.');
+        if (!isLoggedIn) {
+          console.warn('⚠️ سشن منقضی شده یا کوکی sessionid معتبر نیست.');
           await context.close();
           const guestContext = await browser.newContext(baseOptions);
           return { context: guestContext, isLoggedIn: false };
@@ -53,14 +62,12 @@ async function createInstagramContext(browser, customOptions = {}) {
         await context.close();
       }
     } catch (err) {
-      console.warn(`⚠️ خطا در بارگذاری اکانت از ${STATE_PATH}: ${err.message}`);
+      console.warn(`⚠️ خطا در بارگذاری state.json: ${err.message}`);
     }
-  } else {
-    console.log('ℹ️ فایل state.json یافت نشد؛ ورود به‌صورت بدون لاگین (مهمان) انجام می‌شود.');
   }
 
-  const context = await browser.newContext(baseOptions);
-  return { context, isLoggedIn: false };
+  const guestContext = await browser.newContext(baseOptions);
+  return { context: guestContext, isLoggedIn: false };
 }
 
 // ۱. همگام‌سازی کاربران بله
@@ -87,11 +94,7 @@ async function syncAndWelcomeBaleUsers() {
               text: 'ثبت‌نام شما با موفقیت انجام شد! از این پس ریلزهای جدید برای شما ارسال می‌شوند.'
             });
           } catch (e) {
-            if (e.response && e.response.status === 403) {
-              console.warn(`⚠️ کاربر ${chatId} ربات را بلاک کرده یا دسترسی ندارد.`);
-            } else {
-              console.error(`خطا در ارسال پیام خوش‌آمدگویی به ${chatId}:`, e.message);
-            }
+            console.error(`خطا در ارسال پیام خوش‌آمدگویی به ${chatId}:`, e.message);
           }
         }
       }
@@ -101,52 +104,7 @@ async function syncAndWelcomeBaleUsers() {
   }
 }
 
-// 🎯 بخش استخراج ریلزهای تصادفی با قابلیت تلاش برای ورود با اکانت
-async function extractRandomReels(browser, count = 5) {
-  console.log(`\n🎲 در حال دریافت ${count} ریلز جدید و غیرتکراری از بخش عمومی...`);
-  const foundLinks = [];
-  let attempts = 0;
-  const maxAttempts = count * 3;
-
-  while (foundLinks.length < count && attempts < maxAttempts) {
-    attempts++;
-    
-    const { context, isLoggedIn } = await createInstagramContext(browser);
-    const page = await context.newPage();
-
-    try {
-      console.log(`🔄 تلاش ${attempts} (یافته شده: ${foundLinks.length} از ${count}) | وضعیت: ${isLoggedIn ? '🔑 با اکانت' : '🌐 بدون اکانت'}`);
-      
-      await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForTimeout(4000);
-
-      const currentUrl = page.url();
-      const match = currentUrl.match(/https?:\/\/(?:www\.)?instagram\.com\/reel(?:s)?\/([A-Za-z0-9_-]+)/);
-
-      if (match) {
-        const reelUrl = `https://www.instagram.com/reel/${match[1]}/`;
-        
-        const isAlreadyInList = foundLinks.includes(reelUrl);
-        const isAlreadyInDb = db.sentReels.includes(reelUrl);
-
-        if (!isAlreadyInList && !isAlreadyInDb) {
-          foundLinks.push(reelUrl);
-          console.log(`✨ لینک جدید و خالص پیدا شد (${foundLinks.length}/${count}): ${reelUrl}`);
-        }
-      }
-    } catch (err) {
-      console.error(`❌ خطا در تلاش ${attempts}:`, err.message);
-    } finally {
-      await context.close();
-    }
-
-    await sleep(2000);
-  }
-
-  return foundLinks;
-}
-
-// ۲. استخراج لینک ریلزها از طریق دانلود و تحلیل ساختار HTML صفحه دسته‌بندی
+// ۲. استخراج لینک ریلزها از صفحات دسته‌بندی
 async function extractReelsFromPage(browser, categoryUrl) {
   console.log(`📡 در حال باز کردن و استخراج HTML دسته‌بندی: ${categoryUrl}`);
   
@@ -156,42 +114,37 @@ async function extractReelsFromPage(browser, categoryUrl) {
   let uniqueLinks = [];
 
   try {
-    console.log(`🔑 وضعیت ورود دسته‌بندی: ${isLoggedIn ? 'با اکانت' : 'بدون اکانت'}`);
-    await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(6000);
+    console.log(`🔑 وضعیت ورود دسته‌بندی: ${isLoggedIn ? 'با اکانت ✅' : 'بدون اکانت ❌'}`);
+    await page.goto(categoryUrl, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.waitForTimeout(5000);
 
-    // 🔍 --- بخش دیباگ جدید ---
-    const pageTitle = await page.title();
-    const pageHtml = await page.content();
-    console.log(`📌 [دیباگ] عنوان صفحه: "${pageTitle}"`);
-    console.log(`📄 [دیباگ] ۵۰۰ کاراکتر اول HTML:\n${pageHtml.substring(0, 500)}...\n---`);
-
-    // ذخیره اسکرین‌شات از صفحه‌ای که مرورگر در حال دیدن آن است
-    const screenshotPath = `debug-${Date.now()}.png`;
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    console.log(`📸 [دیباگ] اسکرین‌شات ذخیره شد: ${screenshotPath}`);
-    // ----------------------------
-
-    // اسکرول ملایم برای لود شدن محتوای داینامیک صفحه
-    for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => window.scrollBy(0, 1000));
-      await page.waitForTimeout(2000);
+    // اسکرول برای لود شدن پست‌ها
+    for (let i = 0; i < 5; i++) {
+      await page.evaluate(() => window.scrollBy(0, 1200));
+      await page.waitForTimeout(2500);
     }
 
-    // دریافت کامل سورس HTML صفحه (مجدداً بعد از اسکرول)
+    // استخراج لینک‌ها مستقیماً از DOM و Regex
+    const hrefs = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('a'))
+        .map(a => a.href)
+        .filter(href => href.includes('/reel/') || href.includes('/p/'));
+    });
+
     const updatedHtmlContent = await page.content();
-    
-    // روش مبتنی بر Regex روی کل کدهای HTML برای استخراج دقیق لینک‌های ریلز
-    const regex = /https?:\/\/(?:www\.)?instagram\.com\/reel\/([A-Za-z0-9_-]+)/g;
+    const regex = /https?:\/\/(?:www\.)?instagram\.com\/(?:reel|p)\/([A-Za-z0-9_-]+)/g;
     let match;
-    const extractedMatches = [];
 
     while ((match = regex.exec(updatedHtmlContent)) !== null) {
-      extractedMatches.push(`https://www.instagram.com/reel/${match[1]}/`);
+      hrefs.push(`https://www.instagram.com/reel/${match[1]}/`);
     }
 
-    uniqueLinks = Array.from(new Set(extractedMatches));
-    console.log(`🔎 تعداد ریلزهای استخراج شده از HTML: ${uniqueLinks.length}`);
+    uniqueLinks = Array.from(new Set(hrefs.map(link => {
+      const cleanMatch = link.match(/https?:\/\/(?:www\.)?instagram\.com\/(?:reel|p)\/([A-Za-z0-9_-]+)/);
+      return cleanMatch ? `https://www.instagram.com/reel/${cleanMatch[1]}/` : null;
+    }).filter(Boolean)));
+
+    console.log(`🔎 تعداد ریلزهای استخراج شده: ${uniqueLinks.length}`);
   } catch (err) {
     console.error(`💥 خطا در استخراج از دسته‌بندی: ${err.message}`);
   } finally {
@@ -201,7 +154,48 @@ async function extractReelsFromPage(browser, categoryUrl) {
   return uniqueLinks;
 }
 
-// ۳. دانلود از سرویس FastDL (دست‌نخورده)
+// ۳. استخراج ریلزهای تصادفی
+async function extractRandomReels(browser, count = 5) {
+  console.log(`\n🎲 در حال دریافت ${count} ریلز جدید...`);
+  const foundLinks = [];
+  let attempts = 0;
+  const maxAttempts = count * 3;
+
+  const { context, isLoggedIn } = await createInstagramContext(browser);
+
+  while (foundLinks.length < count && attempts < maxAttempts) {
+    attempts++;
+    const page = await context.newPage();
+
+    try {
+      console.log(`🔄 تلاش ${attempts} (یافته شده: ${foundLinks.length} از ${count}) | لاگین: ${isLoggedIn ? 'بله' : 'خیر'}`);
+      
+      await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForTimeout(4000);
+
+      const currentUrl = page.url();
+      const match = currentUrl.match(/https?:\/\/(?:www\.)?instagram\.com\/reel(?:s)?\/([A-Za-z0-9_-]+)/);
+
+      if (match) {
+        const reelUrl = `https://www.instagram.com/reel/${match[1]}/`;
+        if (!foundLinks.includes(reelUrl) && !db.sentReels.includes(reelUrl)) {
+          foundLinks.push(reelUrl);
+          console.log(`✨ لینک جدید یافت شد (${foundLinks.length}/${count}): ${reelUrl}`);
+        }
+      }
+    } catch (err) {
+      console.error(`❌ خطا در تلاش ${attempts}:`, err.message);
+    } finally {
+      await page.close();
+    }
+    await sleep(2000);
+  }
+
+  await context.close();
+  return foundLinks;
+}
+
+// ۴. دانلود با FastDL
 async function downloadReel(browser, reelUrl) {
   const downloadsDir = path.resolve('./downloads');
   if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
@@ -210,7 +204,6 @@ async function downloadReel(browser, reelUrl) {
     console.log(`⏳ تلاش ${attempt} از ۳ برای دانلود ریلز: ${reelUrl}`);
     
     const context = await browser.newContext({ 
-      acceptDownloads: true,
       viewport: { width: 1280, height: 720 },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     });
@@ -231,9 +224,7 @@ async function downloadReel(browser, reelUrl) {
 
       const downloadUrl = await page.getAttribute(downloadBtnSelector, 'href');
 
-      if (!downloadUrl) {
-        throw new Error('لینک دانلود ویدیو یافت نشد.');
-      }
+      if (!downloadUrl) throw new Error('لینک دانلود ویدیو یافت نشد.');
 
       const filePath = path.join(downloadsDir, `${Date.now()}_reel.mp4`);
       
@@ -242,9 +233,7 @@ async function downloadReel(browser, reelUrl) {
         url: downloadUrl,
         responseType: 'stream',
         timeout: 60000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        }
+        headers: { 'User-Agent': 'Mozilla/5.0' }
       });
 
       const writer = fs.createWriteStream(filePath);
@@ -256,74 +245,56 @@ async function downloadReel(browser, reelUrl) {
       });
 
       await context.close();
-      console.log(`✅ دانلود با موفقیت انجام شد: ${filePath}`);
+      console.log(`✅ دانلود انجام شد: ${filePath}`);
       return filePath;
 
     } catch (err) {
       console.error(`❌ تلاش ${attempt} ناموفق بود: ${err.message}`);
       await context.close();
-      await sleep(4000);
+      await sleep(3000);
     }
   }
 
-  console.error(`🛑 دانلود لینک ${reelUrl} پس از ۳ بار تلاش ناموفق بود.`);
   return null;
 }
 
-// ۴. ارسال ویدیو به کاربران بله (دست‌نخورده)
+// ۵. ارسال پیام به بله
 async function dispatchVideoToUsers(filePath, caption) {
-  if (!BALE_BOT_TOKEN || db.users.length === 0) {
-    console.log('⚠️ کاربری برای ارسال یافت نشد یا توکن بله تنظیم نیست.');
-    return;
-  }
+  if (!BALE_BOT_TOKEN || db.users.length === 0) return;
 
   for (const chatId of db.users) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const formData = new FormData();
-        formData.append('chat_id', chatId);
-        formData.append('caption', caption);
-        formData.append('video', fs.createReadStream(filePath));
+    try {
+      const formData = new FormData();
+      formData.append('chat_id', chatId);
+      formData.append('caption', caption);
+      formData.append('video', fs.createReadStream(filePath));
 
-        await axios.post(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendVideo`, formData, {
-          headers: formData.getHeaders(),
-          timeout: 90000
-        });
+      await axios.post(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendVideo`, formData, {
+        headers: formData.getHeaders(),
+        timeout: 90000
+      });
 
-        console.log(`📤 ویدیو به کاربر ${chatId} ارسال شد.`);
-        break;
-      } catch (err) {
-        if (err.response && err.response.status === 403) {
-          console.warn(`🚫 کاربر ${chatId} ربات را بلاک کرده است.`);
-          break;
-        }
-        console.error(`⚠️ تلاش ${attempt} برای ارسال به ${chatId} ناموفق بود: ${err.message}`);
-        await sleep(2000);
-      }
+      console.log(`📤 ویدیو به کاربر ${chatId} ارسال شد.`);
+    } catch (err) {
+      console.error(`⚠️ خطا در ارسال به ${chatId}:`, err.message);
     }
   }
 }
 
-// ۵. اجرای اصلی
+// ۶. اجرا
 async function main() {
   await syncAndWelcomeBaleUsers();
 
   const browser = await chromium.launch({
     headless: true,
-    args: [
-      '--no-sandbox', 
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled'
-    ]
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
   });
 
-  // ۱.۵. اجرای پردازش دسته‌بندی‌ها
   for (const category of config.categories) {
     console.log(`\n📂 شروع پردازش دسته‌بندی: ${category.name}`);
 
     try {
       const allExtractedLinks = await extractReelsFromPage(browser, category.url);
-
       const newLinks = allExtractedLinks.filter((link) => !db.sentReels.includes(link));
       console.log(`✨ لینک‌های جدید: ${newLinks.length}`);
 
@@ -342,9 +313,7 @@ async function main() {
           db.sentReels.push(reelUrl);
           saveDb();
 
-          try {
-            fs.unlinkSync(downloadedFilePath);
-          } catch (e) {}
+          try { fs.unlinkSync(downloadedFilePath); } catch (e) {}
         }
       }
     } catch (err) {
@@ -352,14 +321,11 @@ async function main() {
     }
   }
 
-  // ۲.۵. اجرای بخش ریلزهای تصادفی
   try {
     const randomCount = config.randomReelsCount || 3;
     const randomReelLinks = await extractRandomReels(browser, randomCount);
 
     for (const reelUrl of randomReelLinks) {
-      console.log(`🎬 در حال پردازش و دانلود: ${reelUrl}`);
-      
       const downloadedFilePath = await downloadReel(browser, reelUrl);
 
       if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
@@ -371,13 +337,11 @@ async function main() {
         db.sentReels.push(reelUrl);
         saveDb();
 
-        try {
-          fs.unlinkSync(downloadedFilePath);
-        } catch (e) {}
+        try { fs.unlinkSync(downloadedFilePath); } catch (e) {}
       }
     }
   } catch (err) {
-    console.error('💥 خطا در اجرای بخش ریلزهای تصادفی:', err.message);
+    console.error('💥 خطا در ریلزهای تصادفی:', err.message);
   }
 
   await browser.close();
