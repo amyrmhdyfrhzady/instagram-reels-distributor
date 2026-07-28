@@ -9,12 +9,42 @@ const dbPath = './database.json';
 let db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
 
 const BALE_BOT_TOKEN = process.env.BALE_BOT_TOKEN;
+const STATE_PATH = './state.json'; // 🔑 مسیر فایل کوکی‌های اکانت
 
 function saveDb() {
   fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// 🛠️ تابع کمکی برای ایجاد Context مرورگر با اکانت (در صورت وجود و معتبر بودن)
+async function createInstagramContext(browser, customOptions = {}) {
+  const baseOptions = {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    ...customOptions
+  };
+
+  // بررسی وجود فایل state.json
+  if (fs.existsSync(STATE_PATH)) {
+    try {
+      // ایجاد کانتکست با کوکی‌های اکانت
+      const context = await browser.newContext({
+        ...baseOptions,
+        storageState: STATE_PATH
+      });
+      return { context, isLoggedIn: true };
+    } catch (err) {
+      console.warn(`⚠️ خطا در بارگذاری اکانت از ${STATE_PATH}: ${err.message}`);
+      console.log('🔄 ادامه فرآیند به‌صورت بدون لاگین (مهمان)...');
+    }
+  } else {
+    console.log('ℹ️ فایل state.json یافت نشد؛ ورود به‌صورت بدون لاگین (مهمان) انجام می‌شود.');
+  }
+
+  // ایجاد کانتکست عادی بدون لاگین در صورت نبود یا نامعتبر بودن کوکی
+  const context = await browser.newContext(baseOptions);
+  return { context, isLoggedIn: false };
+}
 
 // ۱. همگام‌سازی کاربران بله
 async function syncAndWelcomeBaleUsers() {
@@ -54,25 +84,32 @@ async function syncAndWelcomeBaleUsers() {
   }
 }
 
-// 🎯 بخش جدید: استخراج چندین ریلز بدون لاگین از طریق هدایت خودکار /reels/
+// 🎯 بخش استخراج ریلزهای تصادفی با قابلیت تلاش برای ورود با اکانت
 async function extractRandomReels(browser, count = 5) {
   console.log(`\n🎲 در حال دریافت ${count} ریلز جدید و غیرتکراری از بخش عمومی...`);
   const foundLinks = [];
   let attempts = 0;
-  const maxAttempts = count * 3; // حداکثر تلاش برای جلوگیری از حلقه بی‌نهایت
+  const maxAttempts = count * 3;
 
   while (foundLinks.length < count && attempts < maxAttempts) {
     attempts++;
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    });
+    
+    // استفاده از تابع ساخت کانتکست هوشمند
+    const { context, isLoggedIn } = await createInstagramContext(browser);
     const page = await context.newPage();
 
     try {
-      console.log(`🔄 تلاش ${attempts} (یافته شده: ${foundLinks.length} از ${count}) برای باز کردن /reels/`);
+      console.log(`🔄 تلاش ${attempts} (یافته شده: ${foundLinks.length} از ${count}) | وضعیت: ${isLoggedIn ? '🔑 با اکانت' : '🌐 بدون اکانت'}`);
       
       await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(4000);
+
+      // بررسی لاگین بودن واقعی در صورت بارگذاری state.json
+      if (isLoggedIn && page.url().includes('/accounts/login/')) {
+        console.warn('⚠️ کوکی‌های اکانت منقضی شده‌اند یا لاگین ناموفق بود (هدایت به صفحه ورود).');
+      } else if (isLoggedIn) {
+        console.log('✅ ورود با اکانت به صفحه ریلز موفقیت‌آمیز بود.');
+      }
 
       const currentUrl = page.url();
       const match = currentUrl.match(/https?:\/\/(?:www\.)?instagram\.com\/reel(?:s)?\/([A-Za-z0-9_-]+)/);
@@ -80,7 +117,6 @@ async function extractRandomReels(browser, count = 5) {
       if (match) {
         const reelUrl = `https://www.instagram.com/reel/${match[1]}/`;
         
-        // بررسی هم‌زمان اینکه: ۱. توی آرایه فعلی نباشه  ۲. قبلاً در دیتابیس ارسال نشده باشه
         const isAlreadyInList = foundLinks.includes(reelUrl);
         const isAlreadyInDb = db.sentReels.includes(reelUrl);
 
@@ -109,29 +145,43 @@ async function extractRandomReels(browser, count = 5) {
   return foundLinks;
 }
 
-// ۲. استخراج لینک ریلزها مستقیماً از DOM
-async function extractReelsFromPage(page, categoryUrl) {
+// ۲. استخراج لینک ریلزها مستقیماً از DOM (با پشتیبانی از لاگین)
+async function extractReelsFromPage(browser, categoryUrl) {
   console.log(`📡 در حال باز کردن دسته‌بندی: ${categoryUrl}`);
-  await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForTimeout(5000);
+  
+  const { context, isLoggedIn } = await createInstagramContext(browser);
+  const page = await context.newPage();
 
-  await page.evaluate(() => window.scrollBy(0, 1000));
-  await page.waitForTimeout(3000);
+  let uniqueLinks = [];
 
-  const reelLinks = await page.evaluate(() => {
-    const anchors = Array.from(document.querySelectorAll('a[href*="/reel/"]'));
-    return anchors.map(a => {
-      const match = a.href.match(/https?:\/\/(?:www\.)?instagram\.com\/reel\/([A-Za-z0-9_-]+)/);
-      return match ? `https://www.instagram.com/reel/${match[1]}/` : null;
-    }).filter(Boolean);
-  });
+  try {
+    console.log(`🔑 وضعیت ورود دسته‌بندی: ${isLoggedIn ? 'با اکانت' : 'بدون اکانت'}`);
+    await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(5000);
 
-  const uniqueLinks = Array.from(new Set(reelLinks));
-  console.log(`🔎 تعداد ریلزهای یافت شده: ${uniqueLinks.length}`);
+    await page.evaluate(() => window.scrollBy(0, 1000));
+    await page.waitForTimeout(3000);
+
+    const reelLinks = await page.evaluate(() => {
+      const anchors = Array.from(document.querySelectorAll('a[href*="/reel/"]'));
+      return anchors.map(a => {
+        const match = a.href.match(/https?:\/\/(?:www\.)?instagram\.com\/reel\/([A-Za-z0-9_-]+)/);
+        return match ? `https://www.instagram.com/reel/${match[1]}/` : null;
+      }).filter(Boolean);
+    });
+
+    uniqueLinks = Array.from(new Set(reelLinks));
+    console.log(`🔎 تعداد ریلزهای یافت شده: ${uniqueLinks.length}`);
+  } catch (err) {
+    console.error(`💥 خطا در استخراج از دسته‌بندی: ${err.message}`);
+  } finally {
+    await context.close();
+  }
+
   return uniqueLinks;
 }
 
-// ۳. دانلود از سرویس FastDL
+// ۳. دانلود از سرویس FastDL (دست‌نخورده)
 async function downloadReel(browser, reelUrl) {
   const downloadsDir = path.resolve('./downloads');
   if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
@@ -200,7 +250,7 @@ async function downloadReel(browser, reelUrl) {
   return null;
 }
 
-// ۴. ارسال ویدیو به کاربران بله
+// ۴. ارسال ویدیو به کاربران بله (دست‌نخورده)
 async function dispatchVideoToUsers(filePath, caption) {
   if (!BALE_BOT_TOKEN || db.users.length === 0) {
     console.log('⚠️ کاربری برای ارسال یافت نشد یا توکن بله تنظیم نیست.');
@@ -255,11 +305,7 @@ async function main() {
     console.log(`\n📂 شروع پردازش دسته‌بندی: ${category.name}`);
 
     try {
-      const context = await browser.newContext();
-      const page = await context.newPage();
-      
-      const allExtractedLinks = await extractReelsFromPage(page, category.url);
-      await context.close();
+      const allExtractedLinks = await extractReelsFromPage(browser, category.url);
 
       const newLinks = allExtractedLinks.filter((link) => !db.sentReels.includes(link));
       console.log(`✨ لینک‌های جدید: ${newLinks.length}`);
