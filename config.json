@@ -3,11 +3,6 @@
   "randomReelsCount": 10,
   "categories": [
     {
-      "name": "expelor",
-      "url": "https://www.instagram.com/reels/",
-      "limit": 10
-    },
-    {
       "name": "Persian Popular",
       "url": "https://www.instagram.com/popular/persian/?utm_source=popular_home",
       "limit": 4
@@ -22,7 +17,6 @@
       "url": "https://www.instagram.com/popular/%D8%A7%DB%8C%D9%86%D8%B3%D8%AA%D8%A7%DA%AF%D8%B1%D8%A7%D9%85%20%D9%81%D8%A7%D8%B1%D8%B3%DB%8C/?utm_source=popular_home",
       "limit": 5
     },
-
     {
       "name": "نوزاد",
       "url": "https://www.instagram.com/popular/%D9%86%D9%88%D8%B2%D8%A7%D8%AF/?utm_source=popular_home",
@@ -33,7 +27,6 @@
       "url": "https://www.instagram.com/popular/%D9%81%D8%A7%D8%B1%D8%B3%DB%8C/?utm_source=popular_home",
       "limit": 4
     },
-
     {
       "name": "Persian bmw",
       "url": "https://www.instagram.com/popular/bmw/?utm_source=popular_home",
