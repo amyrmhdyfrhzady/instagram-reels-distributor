@@ -160,21 +160,33 @@ async function extractReelsFromPage(browser, categoryUrl) {
     await page.goto(categoryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForTimeout(6000);
 
+    // 🔍 --- بخش دیباگ جدید ---
+    const pageTitle = await page.title();
+    const pageHtml = await page.content();
+    console.log(`📌 [دیباگ] عنوان صفحه: "${pageTitle}"`);
+    console.log(`📄 [دیباگ] ۵۰۰ کاراکتر اول HTML:\n${pageHtml.substring(0, 500)}...\n---`);
+
+    // ذخیره اسکرین‌شات از صفحه‌ای که مرورگر در حال دیدن آن است
+    const screenshotPath = `debug-${Date.now()}.png`;
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    console.log(`📸 [دیباگ] اسکرین‌شات ذخیره شد: ${screenshotPath}`);
+    // ----------------------------
+
     // اسکرول ملایم برای لود شدن محتوای داینامیک صفحه
     for (let i = 0; i < 3; i++) {
       await page.evaluate(() => window.scrollBy(0, 1000));
       await page.waitForTimeout(2000);
     }
 
-    // دریافت کامل سورس HTML صفحه
-    const htmlContent = await page.content();
+    // دریافت کامل سورس HTML صفحه (مجدداً بعد از اسکرول)
+    const updatedHtmlContent = await page.content();
     
     // روش مبتنی بر Regex روی کل کدهای HTML برای استخراج دقیق لینک‌های ریلز
     const regex = /https?:\/\/(?:www\.)?instagram\.com\/reel\/([A-Za-z0-9_-]+)/g;
     let match;
     const extractedMatches = [];
 
-    while ((match = regex.exec(htmlContent)) !== null) {
+    while ((match = regex.exec(updatedHtmlContent)) !== null) {
       extractedMatches.push(`https://www.instagram.com/reel/${match[1]}/`);
     }
 
