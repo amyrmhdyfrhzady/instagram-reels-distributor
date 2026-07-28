@@ -195,10 +195,12 @@ async function extractRandomReels(browser, count = 5) {
   return foundLinks;
 }
 
-// ۴. دانلود با FastDL
+// ۳. دانلود از سرویس FastDL با شرط حداقل حجم فایل
 async function downloadReel(browser, reelUrl) {
   const downloadsDir = path.resolve('./downloads');
   if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+
+  const MIN_FILE_SIZE_BYTES = 500 * 1024; // حداقل ۵۰۰ کیلوبایت برای ویدیو معتبر
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     console.log(`⏳ تلاش ${attempt} از ۳ برای دانلود ریلز: ${reelUrl}`);
@@ -245,7 +247,16 @@ async function downloadReel(browser, reelUrl) {
       });
 
       await context.close();
-      console.log(`✅ دانلود انجام شد: ${filePath}`);
+
+      // 📏 بررسی حجم فایل دانلود شده
+      const stats = fs.statSync(filePath);
+      if (stats.size < MIN_FILE_SIZE_BYTES) {
+        console.warn(`⚠️ ویدیو دانلود شده بسیار کم‌حجم است (${(stats.size / 1024).toFixed(1)} KB). احتمالا فایل خراب است!`);
+        fs.unlinkSync(filePath); // حذف فایل کم‌حجم
+        return null; // رد شدن از این فایل
+      }
+
+      console.log(`✅ دانلود موفق و معتبر (${(stats.size / (1024 * 1024)).toFixed(2)} MB): ${filePath}`);
       return filePath;
 
     } catch (err) {
@@ -282,6 +293,7 @@ async function dispatchVideoToUsers(filePath, caption) {
 }
 
 // ۶. اجرا
+// ۶. اجرای اصلی با تضمین ارسال دقیق تعداد مورد نیاز
 async function main() {
   await syncAndWelcomeBaleUsers();
 
@@ -290,42 +302,74 @@ async function main() {
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
   });
 
+  // ۱.۶ پردازش دسته‌بندی‌ها
   for (const category of config.categories) {
     console.log(`\n📂 شروع پردازش دسته‌بندی: ${category.name}`);
 
     try {
       const allExtractedLinks = await extractReelsFromPage(browser, category.url);
-      const newLinks = allExtractedLinks.filter((link) => !db.sentReels.includes(link));
-      console.log(`✨ لینک‌های جدید: ${newLinks.length}`);
+      
+      // فیلتر لینک‌های تکراری
+      const availableLinks = allExtractedLinks.filter((link) => !db.sentReels.includes(link));
+      console.log(`✨ لینک‌های غیرتکراری آماده بررسی: ${availableLinks.length}`);
 
-      const limit = category.limit || 2;
-      const targetLinks = newLinks.slice(0, limit);
+      const targetLimit = category.limit || 2;
+      let successfulDispatches = 0;
+      let linkIndex = 0;
 
-      for (const reelUrl of targetLinks) {
+      // 🔄 حلقه ادامه می‌یابد تا زمانی که دقیقاً به تعداد targetLimit ویدیو ارسال شود یا لینک‌ها تمام شوند
+      while (successfulDispatches < targetLimit && linkIndex < availableLinks.length) {
+        const reelUrl = availableLinks[linkIndex];
+        linkIndex++;
+
+        console.log(`\n🎬 بررسی لینک (${linkIndex}/${availableLinks.length}) برای دسته‌بندی #${category.name}: ${reelUrl}`);
+
         const downloadedFilePath = await downloadReel(browser, reelUrl);
 
         if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
+          // ارسال ویدیو به کاربران
           await dispatchVideoToUsers(
             downloadedFilePath,
             `🎥 ریلز جدید از دسته‌بندی #${category.name}\n\n🔗 ${reelUrl}`
           );
 
+          // ثبت در دیتابیس پس از ارسال موفق
           db.sentReels.push(reelUrl);
           saveDb();
+          successfulDispatches++;
+
+          console.log(`🎯 ارسال موفق (${successfulDispatches}/${targetLimit}) برای دسته‌بندی ${category.name}`);
 
           try { fs.unlinkSync(downloadedFilePath); } catch (e) {}
+        } else {
+          console.log(`⏭️ لینک ${reelUrl} به دلیل حجم کم یا عدم دانلود رد شد. رفتن به لینک بعدی...`);
         }
       }
+
+      console.log(`📊 نتیجه دسته‌بندی ${category.name}: ارسال ${successfulDispatches} از ${targetLimit} ریلز درخواستی.`);
+
     } catch (err) {
       console.error(`💥 خطا در پردازش دسته‌بندی ${category.name}:`, err.message);
     }
   }
 
+  // ۲.۶ پردازش ریلزهای تصادفی با تضمین سقف درخواستی
   try {
-    const randomCount = config.randomReelsCount || 3;
-    const randomReelLinks = await extractRandomReels(browser, randomCount);
+    const randomTargetCount = config.randomReelsCount || 3;
+    let randomDispatches = 0;
 
-    for (const reelUrl of randomReelLinks) {
+    console.log(`\n🎲 در حال دریافت و ارسال ${randomTargetCount} ریلز تصادفی معتبر...`);
+
+    while (randomDispatches < randomTargetCount) {
+      // استخراج یک ریلز تصادفی در هر مرحله
+      const randomLinks = await extractRandomReels(browser, 1);
+      
+      if (randomLinks.length === 0) {
+        console.log('⚠️ ریلز تصادفی جدیدی یافت نشد.');
+        break;
+      }
+
+      const reelUrl = randomLinks[0];
       const downloadedFilePath = await downloadReel(browser, reelUrl);
 
       if (downloadedFilePath && fs.existsSync(downloadedFilePath)) {
@@ -336,8 +380,13 @@ async function main() {
 
         db.sentReels.push(reelUrl);
         saveDb();
+        randomDispatches++;
+
+        console.log(`🎯 ریلز تصادفی موفق (${randomDispatches}/${randomTargetCount})`);
 
         try { fs.unlinkSync(downloadedFilePath); } catch (e) {}
+      } else {
+        console.log(`⏭️ ریلز تصادفی ${reelUrl} رد شد. تلاش مجدد...`);
       }
     }
   } catch (err) {
@@ -347,5 +396,4 @@ async function main() {
   await browser.close();
   console.log('\n🏁 تمام مراحل به پایان رسید.');
 }
-
-main();
+main()
