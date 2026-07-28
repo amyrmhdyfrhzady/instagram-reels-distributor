@@ -2,3 +2,5 @@ node_modules/
 downloads/
 temp_page.mhtml
 .env
+cookies.json
+state.json
