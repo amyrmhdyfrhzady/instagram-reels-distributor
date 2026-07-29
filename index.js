@@ -265,7 +265,9 @@ async function extractRandomReels(browser, count = 5) {
   const maxAttempts = count * 3;
 
   const { context, isLoggedIn } = await createInstagramContext(browser);
-
+  console.log(
+  `🔑 وضعیت ورود ریلز تصادفی: ${isLoggedIn ? 'با اکانت ✅' : 'بدون اکانت ❌'}`
+);
   while (foundLinks.length < count && attempts < maxAttempts) {
     attempts++;
     const page = await context.newPage();
