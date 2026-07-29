@@ -47,4 +47,6 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add database.json config.json
           git commit -m "Update DB & Config [skip ci]" || echo "No changes to commit"
+          git pull --rebase origin main
+          git push origin main
           git push
