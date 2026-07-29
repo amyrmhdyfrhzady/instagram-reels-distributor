@@ -3,11 +3,6 @@
   "randomReelsCount": 10,
   "categories": [
     {
-      "name": "Persian Popular",
-      "url": "https://www.instagram.com/popular/persian/?utm_source=popular_home",
-      "limit": 4
-    },
-    {
       "name": "Persian Cars",
       "url": "https://www.instagram.com/popular/car/?utm_source=popular_home",
       "limit": 2
