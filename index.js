@@ -123,10 +123,17 @@ async function syncAndWelcomeBaleUsers() {
 
   try {
     const res = await axios.get(`https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/getUpdates`);
+    console.log('Bale API response:', JSON.stringify(res.data));
     if (res.data && res.data.ok) {
       for (const update of res.data.result) {
         const chatId = update.message?.chat?.id;
         const text = update.message?.text?.trim();
+
+        console.log('Incoming update:', JSON.stringify({
+         update_id: update.update_id,
+         chatId,
+          text
+         }));
         const callbackQuery = update.callback_query;
 
         // ۱.۳ پردازش کلیک روی دکمه‌های شیشه‌ای لایک/دیس‌لایک
